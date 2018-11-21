@@ -78,7 +78,7 @@ def train_model(
             keep_labels_proportions=True, batch_size=100)
 
     model_name = (
-        "{}{}d_lindist_dw{}_kn{}_hd{}_bs{}_sw{}" +
+        "{}/{}d_lindist_dw{}_kn{}_hd{}_bs{}_sw{}" +
         "norm{}_gammaX{}_rectcnn_ceclike_probG_rec").format(
             dataset.name, latent_dim,
             distance_weight, kernel_num, h_dim,
@@ -167,7 +167,7 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
         # else:
         #     sess.run(model.train_ops["full"], feed_dict=feed_dict)
 
-        sess.run(model.train_ops["full_cec"], feed_dict=feed_dict)
+        sess.run(model.train_ops["full_cec_erf"], feed_dict=feed_dict)
 
         # if epoch_n < 10:
         #     sess.run(model.train_ops["rec_dkl"], feed_dict=feed_dict)
@@ -215,9 +215,9 @@ if __name__ == "__main__":
     latent_dims = [128]
     distance_weights = [0.]
     supervised_weights = [1.0, 2.0, 5.0]
-    kernel_nums = [8, 16, 32, 64]
+    kernel_nums = [32, 64]
     batch_sizes = [100]
-    hidden_dims = [64, 128, 256, 512]
+    hidden_dims = [128, 512]
     gammas = [1.0]
     inits = [1.0]
     cc_eps = [0.0]

@@ -3,6 +3,7 @@ import tensorflow as tf
 import tensorflow.train as tft
 from math import pi
 
+# TODO: losses
 def cramer_wold_distance(X, m, alpha, p, gamma):
     N = tf.cast(tf.shape(X)[0], tf.float32)
     D = tf.cast(tf.shape(X)[1], tf.float32)
@@ -41,7 +42,7 @@ class CwaeModel():
     def __init__(
         self, name, coder, dataset, latent_dim=300,
         supervised_weight=1.0, distance_weight=1.0,
-        optimizer=tft.AdamOptimizer(1e-3),
+        erf_weight=1.0, optimizer=tft.AdamOptimizer(1e-3),
         eps=1e-2, init=1.0, gamma=1.0):
 
         tf.reset_default_graph()
@@ -70,6 +71,7 @@ class CwaeModel():
         train_labeled = tf.placeholder_with_default(True, shape=[])
         tensor_distance_weight = tf.placeholder_with_default(distance_weight, shape=[])
         tensor_supervised_weight = tf.placeholder_with_default(supervised_weight, shape=[])
+        tensor_erf_weight = tf.placeholder_with_default(erf_weight, shape=[])
         tensor_training = tf.placeholder_with_default(False, shape=[])
         labeled_mask = self.get_labels_mask(tensor_labels)
 
@@ -127,6 +129,7 @@ class CwaeModel():
         # class_cost = self.single_class_cross_entropy(
         #     class_logits, tensor_labels, labeled_mask)
 
+        erf_cost = self.total_erf(means, probs)
 
         distance_cost = linear_distance_penalty(
                 z_dim, means, variances, probs, dataset.classes_num)
@@ -150,6 +153,11 @@ class CwaeModel():
                 + tensor_distance_weight * distance_cost
                 + tensor_supervised_weight * cec_cost)
 
+        full_cec_erf_cost = tf.reduce_mean(
+                rec_cost
+                + tensor_supervised_weight * cec_cost
+                + tensor_erf_weight * erf_cost)
+
         tvars = tf.trainable_variables()
         freeze_vars = [
                 var for var in tvars if
@@ -171,6 +179,7 @@ class CwaeModel():
             class_cost + distance_cost * tensor_distance_weight)
 
         full_cec_train_op = optimizer.minimize(full_cec_cost)
+        full_cec_erf_train_op = optimizer.minimize(full_cec_erf_cost)
 
         # Prepare variables for outside use
         self.z_dim = z_dim
@@ -212,7 +221,8 @@ class CwaeModel():
             "rec": rec_train_op,
             "means_only": means_train_op,
             "rec_dkl": rec_dkl_train_op,
-            "full_cec": full_cec_train_op}
+            "full_cec": full_cec_train_op,
+            "full_cec_erf": full_cec_erf_train_op}
 
         self.train_op = train_op
         self.freeze_train_op = freeze_train_op
@@ -226,6 +236,27 @@ class CwaeModel():
         labels_mask = tf.cast(labels_mask, tf.float32)
         return labels_mask
 
+
+    def pairwise_erf(self, first_mean, first_prob,
+                     second_mean, second_prob, alpha=0.1):
+        mean_diff = norm(first_mean - second_mean)
+        x = 1 / mean_diff * tf.log(first_prob / second_prob) + mean_diff / 2
+        total_error = (first_prob * (1 - 0.5 * (1 + tf.erf(x)))
+                       + second_prob * 0.5 * (1 + tf.erf(x - mean_diff)))
+        return tf.reduce_max((alpha, total_error))
+
+    def total_erf(self, means, probs, classes_num=10):
+        total = tf.zeros([])
+        for first_idx in range(classes_num):
+            first_mean = means[first_idx]
+            first_prob = probs[first_idx]
+            for second_idx in range(first_idx + 1, classes_num):
+                second_mean = means[second_idx]
+                second_prob = probs[second_idx]
+                total += self.pairwise_erf(first_mean, first_prob,
+                                           second_mean, second_prob)
+        return total
+         
 
     def ceclike_class_cost(self, tensor_z_all, tensor_target, labeled_mask,
                            class_logits, means, variances, probs, dataset):
