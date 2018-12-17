@@ -64,6 +64,16 @@ class Dataset:
     def blackening(self, X):
         return self.pca.inverse_transform(X)
 
+    def get_pairs(self, pairs_num):
+        pair_indices = np.random.choice(
+            self.train_examples_num, size=(pairs_num, 2), replace=False)
+
+        must_links = [self.train["y"][y_1] == self.train["y"][y_2]
+                      for y_1, y_2 in pair_indices]
+        must_links = (pair_indices, must_links)
+        return must_links
+
+
     def remove_labels_fraction(
         self, number_to_keep=None,
         fraction_to_remove=0.9, keep_labels_proportions=True,
@@ -165,6 +175,7 @@ def get_mnist():
     mnist_train, mnist_test = tf.keras.datasets.mnist.load_data()
     labels = list(str(i) for i in range(10))
     return mnist_train, mnist_test, labels, "mnist"
+
 
 
 def get_fashion_mnist():

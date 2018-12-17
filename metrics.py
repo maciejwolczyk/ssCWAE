@@ -58,12 +58,28 @@ def draw_gmm(
 
 def evaluate_model(
         sess, model, valid_set, epoch, dataset,
-        filename_prefix="test", subset=None, class_in_sum=True):
+        filename_prefix="test", subset=None,
+        class_in_sum=True, training_mode=False):
 
     means_val, alphas_val, p_val = sess.run(
             [model.gausses["means"],
              model.gausses["variations"],
              model.gausses["probs"]])
+
+    cost_sum = (model.costs["full"] if class_in_sum
+                else model.costs["unsupervised"])
+    metrics_tensors = {
+        "cramer-wold": model.costs["cw"],
+        "reconstruction": model.costs["reconstruction"],
+        "classification": model.costs["class"],
+        "distance": model.costs["distance"],
+        "erf": model.costs["erf"],
+        "cec": model.costs["cec"],
+        "sum": cost_sum
+    }
+
+    metrics_final = {k:[] for k in metrics_tensors.keys()}
+    metrics_final["accuracy"] = []
 
     if subset != None:
         valid_set = {"X": valid_set["X"][:subset],
@@ -78,31 +94,28 @@ def evaluate_model(
         X_batch = valid_set["X"][batch_idx * batch_size:(batch_idx + 1) * batch_size]
         y_batch = valid_set["y"][batch_idx * batch_size:(batch_idx + 1) * batch_size]
 
-        cost_sum = (model.costs["full"] if class_in_sum
-                    else model.costs["unsupervised"])
-        costs_list = [model.costs["cw"], model.costs["reconstruction"],
-                      model.costs["class"], model.costs["distance"],
-                      cost_sum]
         feed_dict = {
                 model.placeholders["X"]: X_batch,
                 model.placeholders["X_target"]: X_batch,
-                model.placeholders["y"]: y_batch}
+                model.placeholders["y"]: y_batch,
+                model.placeholders["training"]: training_mode}
 
-        costs, class_logits, out_z = sess.run(
-                [costs_list, model.preds, model.out["z"]],
+        metrics, class_logits, out_z = sess.run(
+                [metrics_tensors, model.preds, model.out["z"]],
                 feed_dict=feed_dict)
 
-        # TODO: ladniej
-        costs[2] = costs[2] * y_batch.sum()
+        metrics["classification"] *= y_batch.sum()
         pred = class_logits.argmax(-1)
         preds += pred.tolist()
 
         correct_n = np.sum((pred == y_batch.argmax(-1))
                            * y_batch.sum(axis=-1))
 
-        costs = costs + [correct_n]
-        costs_arr += [costs]
+        metrics["accuracy"] = correct_n
         all_z += [out_z]
+
+        for key, value in metrics.items():
+            metrics_final[key] += [value]
 
 
     all_z = np.vstack(all_z)
@@ -118,8 +131,6 @@ def evaluate_model(
     # rand_score = adjusted_rand_score(preds, valid_set["y"].argmax(-1))
 
     # PCA
-
-
     if epoch % 5 == 0:
         if model.z_dim == 2: # If we're on a plane, PCA is not necessary
             pca_results = all_z
@@ -129,7 +140,7 @@ def evaluate_model(
             pca_results = pca.fit_transform(all_z)
             pca_means = pca.transform(means_val)
 
-        graph_filename = "graphs/{}/{}_epoch_{}.png".format(
+        graph_filename = "results/{}/graphs/{}_epoch_{}.png".format(
                 model.name, filename_prefix, str(epoch).zfill(3))
         draw_gmm(pca_results, valid_set["y"], dataset,
                  pca_means, alphas_val, p_val, lims=False,
@@ -140,20 +151,20 @@ def evaluate_model(
     #     tsne_results = tsne.fit_transform(all_z[:1000])
     #     draw_gmm(tsne_results, valid_set["y"], lims=False,
     #              filename=graphs_folder + "/tsne_{}_epoch_{}.png".format(filename_prefix, str(epoch).zfill(3)))
-    costs_arr = np.array(costs_arr)
-    cw_cost, rec_cost, _, distance_cost, full_cost, _ = list(
-            round(a, 4) for a in costs_arr.mean(axis=0))
-    class_cost = costs_arr[:, 2].sum() / valid_set["y"].sum()
-    acc = costs_arr[:, -1].sum() / valid_set["y"].sum()
+
+    for key, value in metrics_final.items():
+        if key is "accuracy" or key is "classification":
+            metrics_final[key] = np.sum(value) / valid_set["y"].sum()
+        else:
+            metrics_final[key] = np.mean(value)
 
     if epoch % 5 == 0:
-        print(epoch, "Dataset:", filename_prefix, "DKL:", cw_cost,
-               "Error:", rec_cost, "Classification", class_cost,
-               "Distance", distance_cost, "All", full_cost,
-               "\nAcc", acc)
+        print(epoch, "Dataset:", filename_prefix, end="\t")
+        for key in ["accuracy", "cec", "erf", "reconstruction", "distance"]:
+            print("{}: {:.4f}".format(key, metrics_final[key]), end=" ")
+        print()
 
-    costs = (cw_cost, rec_cost, class_cost, distance_cost, full_cost, acc)
-    return costs, emp_variances
+    return metrics_final, emp_variances
 
 
 def sample_from_classes(sess, model, dataset, epoch, valid_var=None, show_only=False):
@@ -165,7 +176,7 @@ def sample_from_classes(sess, model, dataset, epoch, valid_var=None, show_only=F
         alphas_val = valid_var
         print("Empirical variances", valid_var)
     else:
-        print("Analytic variacnes", alphas_val)
+        print("Analytic variances", alphas_val)
 
     canvas = np.empty((im_h * dataset.classes_num, im_w * 10, im_c))
     for row_idx, (mean, cov) in enumerate(zip(means_val, alphas_val)):
@@ -266,7 +277,7 @@ def interpolation(sess, model, dataset, epoch, show_only=False):
         plt.savefig(filename, bbox_inches='tight', pad_inches=0)
 
 
-def plot_costs(fig, costs, labels, name):
+def plot_costs(fig, costs, name):
     ax = fig.axes
     first_time = False
     if len(ax) == 1:
@@ -280,22 +291,31 @@ def plot_costs(fig, costs, labels, name):
     ax_2.clear()
     ax_1.set_title(name)
 
-    for label, cost in zip(labels, np.array(costs)[:, :-3].T):
-        ax_1.plot(cost, label=label)
+    for key in ["classification", "erf", "cec", "distance"]:
+        ax_1.plot(costs[key], label=key)
 
-    ax_2.set_ylim(0, 1)
-    ax_2.plot(np.array(costs)[:, -1].T, label=labels[-1], c="red")
+    for key in ["accuracy"]:
+        ax_2.plot(costs[key], label=key, c="red")
 
     if first_time:
         fig.legend(loc=3)
     fig.canvas.draw()
 
 def save_costs(model, costs, dataset_type):
-    costs_labels = ["DKL", "Reconstruction", "Class",
-            "Regularization", "Sum", "Accuracy"]
+    cost_dict = {k: [] for k in costs[0].keys()}
+    for cost in costs:
+        for key, value in cost.items():
+            cost_dict[key] += [value]
+
     fig, _ = plt.subplots()
-    plot_costs(fig, costs, costs_labels, dataset_type)
+    plot_costs(fig, cost_dict, dataset_type)
     results_dir = "results/{}".format(model.name)
     fig.savefig(results_dir + "/{}_losses.png".format(dataset_type))
-    np.savetxt(results_dir + "/{}_log.txt".format(dataset_type),
-            costs, fmt="%10.5f", header=" ".join(costs_labels))
+
+    costs_arr = list((key, val) for key, val in cost_dict.items())
+
+    np.savetxt(
+        results_dir + "/{}_log.txt".format(dataset_type),
+        np.array(list(c[1] for c in costs_arr)).T,
+        fmt="%10.5f",
+        header=" ".join(list(c[0] for c in costs_arr)))

@@ -238,7 +238,7 @@ class WideShaoCoder():
         self.kernel_num = kernel_num
         self.image_shape = dataset.image_shape
 
-    def encode(self, x, z_dim):
+    def encode(self, x, z_dim, training):
         im_h, im_w, im_c = self.image_shape
 
         with tf.variable_scope("encoder", reuse=tf.AUTO_REUSE):
@@ -272,7 +272,7 @@ class WideShaoCoder():
             z_mean = tfl.dense(h, units=z_dim, name='z_mean')
             return z_mean
 
-    def decode(self, z, x_dim):
+    def decode(self, z, x_dim, training):
         im_h, im_w, im_c = self.image_shape
 
         with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):

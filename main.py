@@ -27,7 +27,7 @@ def prepare_directories(model_name):
         rmtree(results_dir)
     os.makedirs(results_dir)
 
-    graphs_dir = "graphs/{}".format(model_name)
+    graphs_dir = "results/{}/graphs".format(model_name)
     if os.path.isdir(graphs_dir):
         rmtree(graphs_dir)
     os.makedirs(graphs_dir)
@@ -68,7 +68,7 @@ def train_model(
         dataset_name, latent_dim=300, batch_size=100,
         labeled_examples_n=100, h_dim=400, kernel_size=4,
         kernel_num=25, distance_weight=1.0, cc_ep=0.0, supervised_weight = 1.0,
-        rng_seed=11, init=1.0, gamma=1.0):
+        rng_seed=11, init=1.0, gamma=1.0, erf_weight=1.0, erf_alpha=0.05):
 
 
     dataset = data_loader.get_dataset_by_name(dataset_name, rng_seed=rng_seed)
@@ -77,48 +77,41 @@ def train_model(
             number_to_keep=labeled_examples_n,
             keep_labels_proportions=True, batch_size=100)
 
-    model_name = (
-        "{}/{}d_lindist_dw{}_kn{}_hd{}_bs{}_sw{}" +
-        "norm{}_gammaX{}_rectcnn_ceclike_probG_rec").format(
-            dataset.name, latent_dim,
-            distance_weight, kernel_num, h_dim,
-            batch_size, supervised_weight, init, gamma)
-    print(model_name)
-
-    prepare_directories(model_name)
-
-    #coder = architecture.ReversePyramidCoder(
-    #        dataset, h_dim=h_dim,
-    #        # kernel_size=kernel_size,
-    #        kernel_num=kernel_num)
-
-    coder = architecture.RectCnnCoder(
+    coder = architecture.WideShaoCoder(
             dataset, h_dim=h_dim,
             kernel_size=3,
             kernel_num=kernel_num)
+
+    model_name = (
+        "{}/{}/{}d_lindist_dw{}_kn{}_hd{}_bs{}_sw{}" +
+        "_unnormedcec_meanlogerf{}a{}_e100distchange_1000e").format(
+            dataset.name, coder.__class__.__name__, latent_dim,
+            distance_weight, kernel_num, h_dim,
+            batch_size, supervised_weight, erf_weight, erf_alpha)
+
+    print(model_name)
+    prepare_directories(model_name)
 
     model = cwae.CwaeModel(
             model_name, coder, dataset,
             latent_dim=latent_dim,
             supervised_weight=supervised_weight,
             distance_weight=distance_weight, eps=cc_ep,
-            init=init, gamma=gamma)
+            init=init, gamma=gamma,
+            erf_weight=erf_weight, erf_alpha=erf_alpha)
 
     run_training(model, dataset, batch_size)
 
 
 def run_training(model, dataset, batch_size):
-    n_epochs = 150
+    n_epochs = 1000
     with tf.Session(config=frugal_config) as sess:
         sess.run(tf.global_variables_initializer())
         costs = []
 
-        train_acc = 0.0
         for epoch_n in trange(n_epochs + 1):
-            # distance = (train_acc < 0.99)
             distance = True
             cost = run_epoch(epoch_n, sess, model, dataset, batch_size, distance)
-            train_acc = cost[0][-1]
             costs += [cost]
 
         costs = np.array(costs)
@@ -152,7 +145,10 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
         if batch_idx % 300:
             feed_dict[model.placeholders["train_labeled"]] = False
 
-        if epoch_n < 20:
+        if epoch_n < 100:
+            feed_dict[model.placeholders["erf_weight"]] = 0
+
+        if epoch_n >= 100 or epoch_n < 10:
             feed_dict[model.placeholders["distance_weight"]] = 0
 
         # if epoch_n < 35:
@@ -185,15 +181,15 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
     if epoch_n % 5 == 0:
         print("\tGamma", gamma_val)
 
-    train_cost, _ = metrics.evaluate_model(
+    train_metrics, _ = metrics.evaluate_model(
         sess, model, dataset.semi_labeled_train,
         epoch_n, dataset, filename_prefix="train",
-        subset=3000)
-    valid_cost, valid_var = metrics.evaluate_model(
+        subset=3000, training_mode=True)
+    valid_metrics, valid_var = metrics.evaluate_model(
         sess, model, dataset.train,
         epoch_n, dataset, filename_prefix="valid",
         subset=3000, class_in_sum=False)
-    test_cost, _ = metrics.evaluate_model(
+    test_metrics, _ = metrics.evaluate_model(
         sess, model, dataset.test,
         epoch_n, dataset, filename_prefix="test",
         subset=None)
@@ -209,26 +205,30 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
         metrics.sample_from_classes(sess, model, dataset, epoch_n, valid_var)
         metrics.sample_from_classes(sess, model, dataset, epoch_n, valid_var=None)
 
-    return train_cost, valid_cost, test_cost
+    return train_metrics, valid_metrics, test_metrics
 
 if __name__ == "__main__":
-    latent_dims = [128]
-    distance_weights = [0.]
-    supervised_weights = [1.0, 2.0, 5.0]
-    kernel_nums = [32, 64]
+    latent_dims = [256]
+    distance_weights = [1.]
+    supervised_weights = [1.0]
+    kernel_nums = [64]
     batch_sizes = [100]
-    hidden_dims = [128, 512]
+    hidden_dims = [512]
     gammas = [1.0]
-    inits = [1.0]
+    inits = [0.0001]
     cc_eps = [0.0]
     rng_seeds = [20]
+    erf_weights = [1.]
+    alphas = [1e-6]
 
     for hyperparams in itertools.product(
             latent_dims, kernel_nums, distance_weights,
             hidden_dims, batch_sizes, cc_eps, rng_seeds,
-            supervised_weights, inits, gammas):
-        ld, kn, dw, hd, bs, ccep, rs, sw, init, gamma = hyperparams
+            supervised_weights, inits, gammas,
+            erf_weights, alphas):
+        ld, kn, dw, hd, bs, ccep, rs, sw, init, gamma, erf, alpha = hyperparams
         train_model("mnist", latent_dim=ld, h_dim=hd,
             distance_weight=dw, kernel_num=kn, cc_ep=ccep,
             batch_size=bs, labeled_examples_n=100, rng_seed=rs,
-            supervised_weight=sw, init=init, gamma=gamma)
+            supervised_weight=sw, init=init, gamma=gamma,
+            erf_weight=erf, erf_alpha=alpha)

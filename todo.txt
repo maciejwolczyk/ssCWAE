@@ -16,7 +16,6 @@
 
 1) Spike w errorach - co się dzieje?
 
-
 Ilu studentów/doktorantów? 
 Jakich ludzi? 
 Czy mają być nazwiskami we wniosku (czy konkursy)? 
@@ -156,7 +155,11 @@ Co jeśli wiemy, jakie jest prawdopodobieństwo klas, ale nie znamy klas?
 2) Erf
 3) Erf bez mianownika
 
-3) Najlepszą metodę sprawdzamy na GMM
+4) Najlepszą metodę sprawdzamy na GMM
 ..............
 x) Sprawdź przenoszenie o wektor żeby zachować style. 
 x + 1) Wrzucamy wszystkie polabelowane do latent space i liczymy średnie żeby zainicjalizować meansy
+
+
+2018-11-28
+1) Odległość w erfie trzeba dzielić przez liczbę wymiarów, inaczej jest równa zero. Mądrzejszy sposób normalizacji?
