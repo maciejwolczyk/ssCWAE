@@ -64,14 +64,23 @@ class Dataset:
     def blackening(self, X):
         return self.pca.inverse_transform(X)
 
-    def get_pairs(self, pairs_num):
+    def load_links(self, pairs_num):
         pair_indices = np.random.choice(
             self.train_examples_num, size=(pairs_num, 2), replace=False)
 
-        must_links = [self.train["y"][y_1] == self.train["y"][y_2]
-                      for y_1, y_2 in pair_indices]
-        must_links = (pair_indices, must_links)
-        return must_links
+
+        must_link = []
+        cannot_link = []
+        for first_idx, second_idx in pair_indices:
+            X_pair = [self.train["X"][first_idx], self.train["X"][second_idx]]
+            first_y = self.train["y"][first_idx].argmax()
+            second_y = self.train["y"][second_idx].argmax()
+            if first_y == second_y:
+                must_link += [X_pair]
+            else:
+                cannot_link += [X_pair]
+        self.must_link = np.array(must_link)
+        self.cannot_link = np.array(cannot_link)
 
 
     def remove_labels_fraction(

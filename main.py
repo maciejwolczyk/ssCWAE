@@ -64,6 +64,25 @@ def get_batch(batch_idx, batch_size, dataset):
     y_batch = np.vstack((empty_labels, y_labeled))
     return X_batch, y_batch
 
+def get_links_batch(batch_idx, batch_size, dataset):
+    unlabeled_batch = dataset.train["X"][batch_idx * batch_size:(batch_idx + 1) * batch_size]
+
+    input_dim = unlabeled_batch.shape[-1]
+    must_link_batch = dataset.must_link.reshape(-1, input_dim)
+    cannot_link_batch = dataset.cannot_link.reshape(-1, input_dim)
+
+    labeled_batch_size = len(must_link_batch) + len(cannot_link_batch)
+    batch = np.concatenate((unlabeled_batch, must_link_batch, cannot_link_batch), 0)
+    empty_labels = np.zeros((batch_size + labeled_batch_size, dataset.classes_num))
+
+    must_link_labels = np.zeros((batch_size + labeled_batch_size,))
+    must_link_labels[batch_size:batch_size + len(must_link_batch)] = 1
+
+    cannot_link_labels = np.zeros((batch_size + labeled_batch_size,))
+    cannot_link_labels[batch_size + len(must_link_batch):] = 1
+
+    return batch, empty_labels, must_link_labels, cannot_link_labels
+
 def train_model(
         dataset_name, latent_dim=300, batch_size=100,
         labeled_examples_n=100, h_dim=400, kernel_size=4,
@@ -73,9 +92,11 @@ def train_model(
 
     dataset = data_loader.get_dataset_by_name(dataset_name, rng_seed=rng_seed)
     # dataset.whitening()
-    dataset.remove_labels_fraction(
-            number_to_keep=labeled_examples_n,
-            keep_labels_proportions=True, batch_size=100)
+    # dataset.remove_labels_fraction(
+    #         number_to_keep=labeled_examples_n,
+    #         keep_labels_proportions=True, batch_size=100)
+
+    dataset.load_links(100)
 
     coder = architecture.WideShaoCoder(
             dataset, h_dim=h_dim,
@@ -84,10 +105,10 @@ def train_model(
 
     model_name = (
         "{}/{}/{}d_lindist_dw{}_kn{}_hd{}_bs{}_sw{}" +
-        "_unnormedcec_meanlogerf{}a{}_e100distchange_1000e").format(
+        "_links").format(
             dataset.name, coder.__class__.__name__, latent_dim,
             distance_weight, kernel_num, h_dim,
-            batch_size, supervised_weight, erf_weight, erf_alpha)
+            batch_size, supervised_weight)
 
     print(model_name)
     prepare_directories(model_name)
@@ -104,7 +125,7 @@ def train_model(
 
 
 def run_training(model, dataset, batch_size):
-    n_epochs = 1000
+    n_epochs = 100
     with tf.Session(config=frugal_config) as sess:
         sess.run(tf.global_variables_initializer())
         costs = []
@@ -115,16 +136,19 @@ def run_training(model, dataset, batch_size):
             costs += [cost]
 
         costs = np.array(costs)
-        train_costs, valid_costs, test_costs = costs[:, 0], costs[:, 1], costs[:, 2]
+        valid_costs, test_costs = costs[:, 0], costs[:, 1] #, costs[:, 2]
 
         metrics.save_costs(model, train_costs, "train")
         metrics.save_costs(model, valid_costs, "valid")
-        metrics.save_costs(model, test_costs, "test")
+        # metrics.save_costs(model, test_costs, "test")
 
 def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
-    batches_num = int(np.ceil(len(dataset.unlabeled_train["X"]) / batch_size))
+    batches_num = int(np.ceil(len(dataset.train["X"]) / batch_size))
+    # dataset.unlabeled_train if not links
+
     for batch_idx in trange(batches_num, leave=False):
-        X_batch, y_batch = get_batch(batch_idx, batch_size, dataset)
+        X_batch, y_batch, must_link, cannot_link = get_links_batch(
+                batch_idx, batch_size, dataset)
         if dataset.name == "mnist" and False:
             noisy_X_batch = apply_bernoulli_noise(X_batch)
         else:
@@ -134,7 +158,9 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
         feed_dict = feed_dict={
             model.placeholders["X"]: noisy_X_batch,
             model.placeholders["X_target"]: X_batch,
-            model.placeholders["y"]: y_batch,
+            # model.placeholders["y"]: y_batch,
+            model.placeholders["must_link"]: must_link,
+            model.placeholders["cannot_link"]: cannot_link,
             model.placeholders["train_labeled"]: True,
             model.placeholders["training"]: True}
 
@@ -145,10 +171,7 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
         if batch_idx % 300:
             feed_dict[model.placeholders["train_labeled"]] = False
 
-        if epoch_n < 100:
-            feed_dict[model.placeholders["erf_weight"]] = 0
-
-        if epoch_n >= 100 or epoch_n < 10:
+        if epoch_n < 15:
             feed_dict[model.placeholders["distance_weight"]] = 0
 
         # if epoch_n < 35:
@@ -181,10 +204,10 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
     if epoch_n % 5 == 0:
         print("\tGamma", gamma_val)
 
-    train_metrics, _ = metrics.evaluate_model(
-        sess, model, dataset.semi_labeled_train,
-        epoch_n, dataset, filename_prefix="train",
-        subset=3000, training_mode=True)
+    # train_metrics, _ = metrics.evaluate_model(
+    #     sess, model, dataset.semi_labeled_train,
+    #     epoch_n, dataset, filename_prefix="train",
+    #     subset=3000, training_mode=True)
     valid_metrics, valid_var = metrics.evaluate_model(
         sess, model, dataset.train,
         epoch_n, dataset, filename_prefix="valid",
@@ -205,20 +228,20 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
         metrics.sample_from_classes(sess, model, dataset, epoch_n, valid_var)
         metrics.sample_from_classes(sess, model, dataset, epoch_n, valid_var=None)
 
-    return train_metrics, valid_metrics, test_metrics
+    return valid_metrics, test_metrics
 
 if __name__ == "__main__":
-    latent_dims = [256]
+    latent_dims = [256, 512]
     distance_weights = [1.]
-    supervised_weights = [1.0]
-    kernel_nums = [64]
+    supervised_weights = [2.0, 4.0]
+    kernel_nums = [64, 128]
     batch_sizes = [100]
-    hidden_dims = [512]
+    hidden_dims = [256, 512]
     gammas = [1.0]
     inits = [0.0001]
     cc_eps = [0.0]
     rng_seeds = [20]
-    erf_weights = [1.]
+    erf_weights = [0.]
     alphas = [1e-6]
 
     for hyperparams in itertools.product(

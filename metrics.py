@@ -23,7 +23,9 @@ def draw_gmm(
         ax.set_xlim(-10, 10)
         ax.set_ylim(-10, 10)
 
-    color_arr = ['blue', 'green', 'red', 'cyan', 'magenta', 'yellow', 'lime', 'purple', 'pink', 'brown', 'orange', 'teal', 'coral', 'lightblue', 'black']
+    color_arr = ['blue', 'green', 'red', 'cyan', 'magenta', 'yellow', 'lime',
+                 'purple', 'pink', 'brown', 'orange', 'teal', 'coral',
+                 'lightblue', 'black']
     color_arr = np.array(color_arr)
 
 
@@ -71,7 +73,7 @@ def evaluate_model(
     metrics_tensors = {
         "cramer-wold": model.costs["cw"],
         "reconstruction": model.costs["reconstruction"],
-        "classification": model.costs["class"],
+        # "classification": model.costs["class"],
         "distance": model.costs["distance"],
         "erf": model.costs["erf"],
         "cec": model.costs["cec"],
@@ -98,13 +100,15 @@ def evaluate_model(
                 model.placeholders["X"]: X_batch,
                 model.placeholders["X_target"]: X_batch,
                 model.placeholders["y"]: y_batch,
+                model.placeholders["must_link"]: np.zeros((len(X_batch),)),
+                model.placeholders["cannot_link"]: np.zeros((len(X_batch),)),
                 model.placeholders["training"]: training_mode}
 
         metrics, class_logits, out_z = sess.run(
                 [metrics_tensors, model.preds, model.out["z"]],
                 feed_dict=feed_dict)
 
-        metrics["classification"] *= y_batch.sum()
+        # metrics["classification"] *= y_batch.sum()
         pred = class_logits.argmax(-1)
         preds += pred.tolist()
 
@@ -128,7 +132,8 @@ def evaluate_model(
         # print(emp_var, len(emp_var))
         emp_variances += [np.mean(np.square(emp_var))]
 
-    # rand_score = adjusted_rand_score(preds, valid_set["y"].argmax(-1))
+    rand_score = adjusted_rand_score(preds, valid_set["y"].argmax(-1))
+    metrics_final["rand_score"] = rand_score
 
     # PCA
     if epoch % 5 == 0:
@@ -160,7 +165,7 @@ def evaluate_model(
 
     if epoch % 5 == 0:
         print(epoch, "Dataset:", filename_prefix, end="\t")
-        for key in ["accuracy", "cec", "erf", "reconstruction", "distance"]:
+        for key in ["rand_score", "cec", "erf", "reconstruction", "distance"]:
             print("{}: {:.4f}".format(key, metrics_final[key]), end=" ")
         print()
 
@@ -294,7 +299,7 @@ def plot_costs(fig, costs, name):
     for key in ["classification", "erf", "cec", "distance"]:
         ax_1.plot(costs[key], label=key)
 
-    for key in ["accuracy"]:
+    for key in ["rand_score"]:
         ax_2.plot(costs[key], label=key, c="red")
 
     if first_time:
