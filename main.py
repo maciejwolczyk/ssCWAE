@@ -68,10 +68,24 @@ def get_links_batch(batch_idx, batch_size, dataset):
     unlabeled_batch = dataset.train["X"][batch_idx * batch_size:(batch_idx + 1) * batch_size]
 
     input_dim = unlabeled_batch.shape[-1]
-    must_link_batch = dataset.must_link.reshape(-1, input_dim)
-    cannot_link_batch = dataset.cannot_link.reshape(-1, input_dim)
+    labeled_batch_size = batch_size
+    links_num = len(dataset.must_link) + len(dataset.cannot_link)
+    indices = np.random.choice(
+        links_num, size=min(labeled_batch_size // 2, links_num),
+        replace=False)
 
-    labeled_batch_size = len(must_link_batch) + len(cannot_link_batch)
+    must_link_batch = []
+    cannot_link_batch = []
+    for idx in indices:
+        if idx >= len(dataset.must_link):
+            idx -= len(dataset.must_link)
+            cannot_link_batch += [dataset.cannot_link[idx]]
+        else:
+            must_link_batch += [dataset.must_link[idx]]
+
+    must_link_batch = np.array(must_link_batch).reshape(-1, input_dim)
+    cannot_link_batch = np.array(cannot_link_batch).reshape(-1, input_dim)
+
     batch = np.concatenate((unlabeled_batch, must_link_batch, cannot_link_batch), 0)
     empty_labels = np.zeros((batch_size + labeled_batch_size, dataset.classes_num))
 
@@ -83,11 +97,12 @@ def get_links_batch(batch_idx, batch_size, dataset):
 
     return batch, empty_labels, must_link_labels, cannot_link_labels
 
+
 def train_model(
         dataset_name, latent_dim=300, batch_size=100,
         labeled_examples_n=100, h_dim=400, kernel_size=4,
         kernel_num=25, distance_weight=1.0, cc_ep=0.0, supervised_weight = 1.0,
-        rng_seed=11, init=1.0, gamma=1.0, erf_weight=1.0, erf_alpha=0.05):
+        rng_seed=11, init=1.0, gamma=1.0, erf_weight=1.0, erf_alpha=0.05, links_num=1000):
 
 
     dataset = data_loader.get_dataset_by_name(dataset_name, rng_seed=rng_seed)
@@ -96,7 +111,7 @@ def train_model(
     #         number_to_keep=labeled_examples_n,
     #         keep_labels_proportions=True, batch_size=100)
 
-    dataset.load_links(100)
+    dataset.load_links(links_num)
 
     coder = architecture.WideShaoCoder(
             dataset, h_dim=h_dim,
@@ -104,11 +119,11 @@ def train_model(
             kernel_num=kernel_num)
 
     model_name = (
-        "{}/{}/{}d_lindist_dw{}_kn{}_hd{}_bs{}_sw{}" +
-        "_links").format(
+        "{}/{}/{}d_cwdist_dw{}_kn{}_hd{}_bs{}_sw{}" +
+        "_{}links_e30_nonorm_pdf_subsets").format(
             dataset.name, coder.__class__.__name__, latent_dim,
             distance_weight, kernel_num, h_dim,
-            batch_size, supervised_weight)
+            batch_size, supervised_weight, links_num)
 
     print(model_name)
     prepare_directories(model_name)
@@ -138,9 +153,9 @@ def run_training(model, dataset, batch_size):
         costs = np.array(costs)
         valid_costs, test_costs = costs[:, 0], costs[:, 1] #, costs[:, 2]
 
-        metrics.save_costs(model, train_costs, "train")
+        # metrics.save_costs(model, train_costs, "train")
         metrics.save_costs(model, valid_costs, "valid")
-        # metrics.save_costs(model, test_costs, "test")
+        metrics.save_costs(model, test_costs, "test")
 
 def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
     batches_num = int(np.ceil(len(dataset.train["X"]) / batch_size))
@@ -171,7 +186,7 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
         if batch_idx % 300:
             feed_dict[model.placeholders["train_labeled"]] = False
 
-        if epoch_n < 15:
+        if epoch_n < 30:
             feed_dict[model.placeholders["distance_weight"]] = 0
 
         # if epoch_n < 35:
@@ -231,27 +246,27 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
     return valid_metrics, test_metrics
 
 if __name__ == "__main__":
-    latent_dims = [256, 512]
+    latent_dims = [64, 128]
     distance_weights = [1.]
-    supervised_weights = [2.0, 4.0]
-    kernel_nums = [64, 128]
-    batch_sizes = [100]
+    supervised_weights = [5.0]
+    kernel_nums = [32, 64, 128]
+    batch_sizes = [200]
     hidden_dims = [256, 512]
     gammas = [1.0]
-    inits = [0.0001]
-    cc_eps = [0.0]
+    inits = [0.01]
     rng_seeds = [20]
     erf_weights = [0.]
     alphas = [1e-6]
+    links_nums = [100, 500, 1000]
 
     for hyperparams in itertools.product(
             latent_dims, kernel_nums, distance_weights,
-            hidden_dims, batch_sizes, cc_eps, rng_seeds,
+            hidden_dims, batch_sizes, rng_seeds,
             supervised_weights, inits, gammas,
-            erf_weights, alphas):
-        ld, kn, dw, hd, bs, ccep, rs, sw, init, gamma, erf, alpha = hyperparams
+            erf_weights, links_nums):
+        ld, kn, dw, hd, bs, rs, sw, init, gamma, erf, ln = hyperparams
         train_model("mnist", latent_dim=ld, h_dim=hd,
-            distance_weight=dw, kernel_num=kn, cc_ep=ccep,
+            distance_weight=dw, kernel_num=kn, cc_ep=0.,
             batch_size=bs, labeled_examples_n=100, rng_seed=rs,
             supervised_weight=sw, init=init, gamma=gamma,
-            erf_weight=erf, erf_alpha=alpha)
+            erf_weight=erf, links_num=ln)

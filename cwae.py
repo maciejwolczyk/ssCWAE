@@ -103,13 +103,13 @@ class CwaeModel():
         class_logits = calculate_logits(tensor_z, means, variances, probs)
         class_probs = tf.nn.softmax(class_logits)
 
-        must_probs = tf.boolean_mask(class_probs, must_link_mask)
-        must_probs = tf.reshape(must_probs, (-1, dataset.classes_num, 2))
-        must_link_labels = self.get_must_link_labels(must_probs)
+        must_logits = tf.boolean_mask(class_logits, must_link_mask)
+        must_logits = tf.reshape(must_logits, (-1, dataset.classes_num, 2))
+        must_link_labels = self.get_must_link_labels(must_logits)
 
-        cannot_probs = tf.boolean_mask(class_probs, cannot_link_mask)
-        cannot_probs = tf.reshape(cannot_probs, (-1, dataset.classes_num, 2))
-        cannot_link_labels = self.get_cannot_link_labels(cannot_probs, dataset.classes_num)
+        cannot_logits = tf.boolean_mask(class_logits, cannot_link_mask)
+        cannot_logits = tf.reshape(cannot_logits, (-1, dataset.classes_num, 2))
+        cannot_link_labels = self.get_cannot_link_labels(cannot_logits, dataset.classes_num)
 
         zero_labels = tf.zeros_like(tf.boolean_mask(labeled_mask, tf.logical_not(labeled_mask)))
         zero_labels = tf.cast(zero_labels, tf.int64)
@@ -117,6 +117,9 @@ class CwaeModel():
         link_labels = tf.concat(link_labels, axis=0)
         link_labels = tf.one_hot(link_labels, dataset.classes_num)
         link_labels = tf.cast(link_labels, tf.float32)
+
+        N0 = tf.cast(tf.shape(tensor_x)[0], tf.float32)
+        gamma = tf.pow(4 / (3 * N0 / dataset.classes_num), 0.4)
 
         # Old Cramer-Wold cost
         cw_cost = cramer_wold_distance(
@@ -150,6 +153,7 @@ class CwaeModel():
         # New Cramer-Wold cost
 
 
+
         target_labels = tf.cond(
             tensor_training,
             lambda: link_labels,
@@ -157,7 +161,7 @@ class CwaeModel():
 
         cec_cost = self.ceclike_class_cost(
             tensor_z, target_labels, labeled_mask,
-            class_logits, means, variances, probs,
+            class_logits, means, variances, probs, gamma,
             dataset, training_mode=tensor_training)
 
         # cec_cost = self.ceclike_links_cost(
@@ -172,8 +176,8 @@ class CwaeModel():
 
         erf_cost = self.total_erf(means, probs, alpha=erf_alpha)
 
-        distance_cost = linear_distance_penalty(
-                z_dim, means, variances, probs, dataset.classes_num)
+        distance_cost = cw_distance_penalty(
+                z_dim, means, variances, probs, dataset.classes_num, gamma)
         # l2_means_cost = 0.0 * tensor_distance_weight * tf.reduce_mean(tf.sqrt(norm_squared(means)))
         # distance_cost = distance_cost + l2_means_cost
 
@@ -302,8 +306,7 @@ class CwaeModel():
 
             probs: [link_num, class_num, 2]
         """
-
-        pair_labels = tf.reduce_prod(probs, 2)  # [link_num, class_num]
+        pair_labels = tf.reduce_sum(probs, 2)  # [link_num, class_num]
         pair_labels = tf.argmax(pair_labels, -1)  # [link_num]
         return pair_labels
 
@@ -313,13 +316,15 @@ class CwaeModel():
         first_probs = tf.reshape(probs[:, :, 0], (-1, classes_num, 1))  # [links_num, 1, n_classes]
         second_probs = tf.reshape(probs[:, :, 1], (-1, 1, classes_num))  # [links_num, n_classes, 1]
 
-        mask = (1 - tf.eye(classes_num)) # array with 0 on the diag and 1 otherwise
+        inf_vec = tf.constant([-np.inf] * classes_num, dtype=tf.float32)
+        mask = tf.eye(classes_num) # array with 0 on the diag and 1 otherwise
+        mask = tf.linalg.set_diag(mask, inf_vec)
         mask = tf.reshape(mask, (1, classes_num, classes_num))
 
         # Diagonal values mean first_label = second_label. Since these examples cannot link
         # we need to set 0 there.
-        final_probs = tf.multiply(first_probs, second_probs) # [num_links, n_classes, n_classes]
-        final_probs = tf.multiply(final_probs, mask)
+        final_probs = tf.add(first_probs, second_probs) # [num_links, n_classes, n_classes]
+        final_probs = tf.add(first_probs, second_probs)
 
         final_probs = tf.reshape(final_probs, (-1, classes_num * classes_num)) # [num_links, n_classes * n_classes]
         argmaxes = tf.argmax(final_probs, 1) #
@@ -328,6 +333,7 @@ class CwaeModel():
         second_labels = tf.mod(argmaxes, classes_num)  # [num_links]
         final_labels = tf.stack((first_labels, second_labels), 1) # [links_num, 2]
         final_labels = tf.reshape(final_labels, (-1,))  # [links_num]
+        # final_labels = tf.Print(final_labels, [final_labels])
 
         return final_labels
 
@@ -366,7 +372,8 @@ class CwaeModel():
 
     def ceclike_class_cost(self,
             tensor_z_all, tensor_target, labeled_mask,
-            class_logits, means, variances, probs, dataset, training_mode):
+            class_logits, means, variances, probs, gamma,
+            dataset, training_mode):
 
         D = tf.cast(tf.shape(tensor_z_all)[-1], tf.float32)
 
@@ -382,8 +389,6 @@ class CwaeModel():
         unlabeled_argmaxed_tensor = tf.argmax(class_logits, axis=-1)
 
 
-        N0 = tf.cast(tf.shape(tensor_z_all)[0], tf.float32)
-        gamma = tf.pow(4 / (3 * N0 / dataset.classes_num), 0.4)
 
         self_cost_tensor = 1 / tf.sqrt(2 * pi * (2 * variances + 2 * gamma))
         means = tf.expand_dims(means, 1)
@@ -431,16 +436,18 @@ class CwaeModel():
         labels = tf.eye(dataset.classes_num)
         labeled_num = tf.reduce_sum(tf.cast(labeled_mask, tf.float32))
 
-        class_normalization = True
+        class_normalization = False
         if class_normalization:
             cwae_sum = tf.nn.softmax_cross_entropy_with_logits_v2(
                     labels=tf.eye(dataset.classes_num), logits=logits)
             cwae_sum *= probs
         else:
-            cwae_sum = tf.cond(
-                tf.greater(labeled_num, 0),
-                lambda: -1 * tf.diag_part(logits) * probs,
-                lambda: tf.zeros([], tf.float32))
+            # TODO: class cost should work in test
+            # cwae_sum = tf.cond(
+            #     tf.greater(labeled_num, 0),
+            #     lambda: -1 * tf.diag_part(logits) * probs,
+            #     lambda: tf.zeros([], tf.float32))
+            cwae_sum = -1 * tf.diag_part(logits) * probs
 
 
         return tf.reduce_sum(cwae_sum)
@@ -655,7 +662,7 @@ def calculate_cw_probs(tensor_z, means, alpha, p):
 
 def calculate_pdf_logits(tensor_z, means, alpha, p):
     m_X_sub_matrix = tf.subtract(tf.expand_dims(means, 0), tf.expand_dims(tensor_z, 1))
-    pdf = tf.exp(-norm_squared(m_X_sub_matrix) / (1e6 * 2 * alpha))
+    pdf = p * tf.exp(-norm_squared(m_X_sub_matrix) / (2 * alpha))
     pdf /= tf.sqrt(2 * pi * alpha)
     return pdf
 
@@ -772,13 +779,12 @@ def min_distance_penalty(z_dim, means, variances, classes_num):
     dist = tf.boolean_mask(dist, tf.cast(mask, tf.bool))
     return -tf.reduce_mean(tf.sqrt(tf.reduce_min(dist))) # sqrt
 
-def cw_distance_penalty(self, z_dim, means, variances, probs, classes_num):
+def cw_distance_penalty(z_dim, means, variances, probs, classes_num, gamma):
     # probs *= 10
 
     N0 = 100
     G = 10
-    # gamma = tf.pow(4 / (3 * N0 / G), 0.4)
-    gamma = self.gamma
+    # gamma = self.gamma
     # gamma = 5.0 # evil trick
     var_arr = tf.expand_dims(variances, 0) + tf.expand_dims(variances, 1)
     p_arr = tf.expand_dims(probs, 1) * tf.expand_dims(probs, 0)

@@ -65,9 +65,10 @@ class Dataset:
         return self.pca.inverse_transform(X)
 
     def load_links(self, pairs_num):
-        pair_indices = np.random.choice(
-            self.train_examples_num, size=(pairs_num, 2), replace=False)
-
+        pair_indices = self.rng.choice(
+            self.train_examples_num, size=(10000, 2), replace=False)
+        pair_indices = pair_indices[:pairs_num]
+        print(pair_indices[0])
 
         must_link = []
         cannot_link = []

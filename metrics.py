@@ -296,7 +296,7 @@ def plot_costs(fig, costs, name):
     ax_2.clear()
     ax_1.set_title(name)
 
-    for key in ["classification", "erf", "cec", "distance"]:
+    for key in ["reconstruction", "cec", "distance"]:
         ax_1.plot(costs[key], label=key)
 
     for key in ["rand_score"]:
