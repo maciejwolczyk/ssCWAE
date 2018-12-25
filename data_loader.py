@@ -66,7 +66,7 @@ class Dataset:
 
     def load_links(self, pairs_num):
         pair_indices = self.rng.choice(
-            self.train_examples_num, size=(10000, 2), replace=False)
+            self.train_examples_num, size=(10000, 2), replace=True)
         pair_indices = pair_indices[:pairs_num]
         print(pair_indices[0])
 
@@ -82,6 +82,13 @@ class Dataset:
                 cannot_link += [X_pair]
         self.must_link = np.array(must_link)
         self.cannot_link = np.array(cannot_link)
+
+        indices = pair_indices.reshape(-1)
+        semi_labeled_X = self.train["X"][indices]
+        semi_labeled_y = self.train["y"][indices]
+
+        self.semi_labeled_train = {"X": semi_labeled_X,
+                                   "y": semi_labeled_y}
 
 
     def remove_labels_fraction(

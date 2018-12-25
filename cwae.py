@@ -93,7 +93,6 @@ class CwaeModel():
             lambda: tf.boolean_mask(tensor_z, tf.logical_not(labeled_mask)))
 
 
-
         means, variances, probs = get_gaussians(dataset.classes_num, z_dim, init, dataset)
         default_gamma = get_empirical_gamma(
                 unsupervised_tensor_z, means, variances, probs, dataset.classes_num)
@@ -104,18 +103,20 @@ class CwaeModel():
         class_probs = tf.nn.softmax(class_logits)
 
         must_logits = tf.boolean_mask(class_logits, must_link_mask)
-        must_logits = tf.reshape(must_logits, (-1, dataset.classes_num, 2))
-        must_link_labels = self.get_must_link_labels(must_logits)
+        must_logits = tf.reshape(must_logits, (-1, 2, dataset.classes_num))
+        must_link_labels, must_link_probs = self.get_must_link_labels(must_logits)
 
         cannot_logits = tf.boolean_mask(class_logits, cannot_link_mask)
-        cannot_logits = tf.reshape(cannot_logits, (-1, dataset.classes_num, 2))
-        cannot_link_labels = self.get_cannot_link_labels(cannot_logits, dataset.classes_num)
+        cannot_logits = tf.reshape(cannot_logits, (-1, 2, dataset.classes_num))
+        cannot_link_labels, cannot_link_probs = self.get_cannot_link_labels(cannot_logits, dataset.classes_num)
 
         zero_labels = tf.zeros_like(tf.boolean_mask(labeled_mask, tf.logical_not(labeled_mask)))
         zero_labels = tf.cast(zero_labels, tf.int64)
         link_labels = (zero_labels, must_link_labels, cannot_link_labels)
         link_labels = tf.concat(link_labels, axis=0)
+        # link_labels = tf.Print(link_labels, [tf.boolean_mask(link_labels, labeled_mask)], "### labels", summarize=1000)
         link_labels = tf.one_hot(link_labels, dataset.classes_num)
+        # link_labels = tf.Print(link_labels, [link_labels[100:]], "### labels", summarize=1000)
         link_labels = tf.cast(link_labels, tf.float32)
 
         N0 = tf.cast(tf.shape(tensor_x)[0], tf.float32)
@@ -159,6 +160,11 @@ class CwaeModel():
             lambda: link_labels,
             lambda: tensor_labels)
 
+        labeled_mask = tf.cond(
+            tensor_training,
+            lambda: labeled_mask,
+            lambda: tf.ones_like(labeled_mask))
+
         cec_cost = self.ceclike_class_cost(
             tensor_z, target_labels, labeled_mask,
             class_logits, means, variances, probs, gamma,
@@ -174,6 +180,9 @@ class CwaeModel():
         # class_cost = self.single_class_cross_entropy(
         #     class_logits, tensor_labels, labeled_mask)
 
+
+        link_mle_cost = -tf.reduce_mean(
+            tf.concat((must_link_probs, cannot_link_probs), 0))
         erf_cost = self.total_erf(means, probs, alpha=erf_alpha)
 
         distance_cost = cw_distance_penalty(
@@ -217,7 +226,7 @@ class CwaeModel():
         # Prepare various train ops
         train_op = optimizer.minimize(full_cost)
         freeze_train_op = optimizer.minimize(full_cost, var_list=freeze_vars)
-        means_train_op = optimizer.minimize(class_cost, var_list=means_vars)
+        means_train_op = optimizer.minimize(link_mle_cost, var_list=means_vars)
 
         rec_train_op = optimizer.minimize(rec_cost)
         rec_dkl_train_op = optimizer.minimize(rec_cost + log_cw_cost)
@@ -281,40 +290,33 @@ class CwaeModel():
         self.preds = class_logits
 
 
+
     def get_labels_mask(self, tensor_labels):
         one = tf.constant(1, tf.float32)
         labels_mask = tf.equal(one, tf.reduce_sum(tensor_labels, axis=-1))
         labels_mask = tf.cast(labels_mask, tf.float32)
         return labels_mask
 
-    # TODO: przejrzyj te trzy funkcje milion razy
-    def get_link_labels_mask(self, tensor_must_link, tensor_cannot_link, examples_num):
-        tensor_must_link = tf.reshape(tensor_must_link, (-1,))
-        tensor_cannot_link = tf.reshape(tensor_cannot_link, (-1,))
-        labels_mask = tf.Variable(tf.zeros((examples_num,)))
-        ones = tf.ones_like(tensor_must_link)
-        labels_mask = tf.scatter_update(
-                labels_mask, tensor_must_link, ones)
-        ones = tf.ones_like(tensor_cannot_link)
-        labels_mask = tf.scatter_update(
-                labels_mask, tensor_cannot_link, tf.ones_like(tensor_cannot_link))
-        labels_mask = tf.cast(labels_mask, tf.float32)
-        return labels_mask
 
     def get_must_link_labels(self, probs):
         """Get most probable labels for given logits.
 
-            probs: [link_num, class_num, 2]
+            probs: [link_num, 2, class_num]
         """
-        pair_labels = tf.reduce_sum(probs, 2)  # [link_num, class_num]
+        pair_labels = tf.reduce_sum(probs, 1)  # [link_num, class_num]
+        pair_probs = tf.reduce_max(pair_labels, -1)
         pair_labels = tf.argmax(pair_labels, -1)  # [link_num]
-        return pair_labels
+        pair_labels = tf.reshape(pair_labels, (-1, 1))  # [link_num]
+        pair_labels = tf.tile(pair_labels, (1, 2))  # [link_num]
+        # pair_labels = tf.Print(pair_labels, [pair_labels], "### must ###", summarize=100)
+        pair_labels = tf.reshape(pair_labels, (-1,))
+        return pair_labels, pair_probs
 
     def get_cannot_link_labels(self, probs, classes_num):
-        # probs: [link_num, class_num, 2]
+        # probs: [link_num, 2, class_num]
 
-        first_probs = tf.reshape(probs[:, :, 0], (-1, classes_num, 1))  # [links_num, 1, n_classes]
-        second_probs = tf.reshape(probs[:, :, 1], (-1, 1, classes_num))  # [links_num, n_classes, 1]
+        first_probs = tf.reshape(probs[:, 0, :], (-1, classes_num, 1))  # [links_num, 1, n_classes]
+        second_probs = tf.reshape(probs[:, 1, :], (-1, 1, classes_num))  # [links_num, n_classes, 1]
 
         inf_vec = tf.constant([-np.inf] * classes_num, dtype=tf.float32)
         mask = tf.eye(classes_num) # array with 0 on the diag and 1 otherwise
@@ -324,18 +326,19 @@ class CwaeModel():
         # Diagonal values mean first_label = second_label. Since these examples cannot link
         # we need to set 0 there.
         final_probs = tf.add(first_probs, second_probs) # [num_links, n_classes, n_classes]
-        final_probs = tf.add(first_probs, second_probs)
+        final_probs = tf.add(final_probs, mask)
 
         final_probs = tf.reshape(final_probs, (-1, classes_num * classes_num)) # [num_links, n_classes * n_classes]
         argmaxes = tf.argmax(final_probs, 1) #
+        pair_probs = tf.reduce_max(final_probs, 1)
 
         first_labels = argmaxes // classes_num  # [num_links]
         second_labels = tf.mod(argmaxes, classes_num)  # [num_links]
         final_labels = tf.stack((first_labels, second_labels), 1) # [links_num, 2]
         final_labels = tf.reshape(final_labels, (-1,))  # [links_num]
-        # final_labels = tf.Print(final_labels, [final_labels])
+        # final_labels = tf.Print(final_labels, [tf.reshape(final_labels, (-1, 2))], "### cannot ###", summarize=100)
 
-        return final_labels
+        return final_labels, pair_probs
 
     def pairwise_erf(self, first_mean, first_prob,
                      second_mean, second_prob, alpha):
@@ -758,7 +761,7 @@ def truncated_distance_penalty(z_dim, means, variances, classes_num):
     cost = tf.reduce_mean(tf.maximum(0.0, dist) * mask)
     return cost
 
-def linear_distance_penalty(z_dim, means, variances, probs, classes_num):
+def linear_distance_penalty(z_dim, means, variances, probs, classes_num, gamma):
     dist = tf.reduce_sum(tf.square(tf.expand_dims(means, 1) - tf.expand_dims(means, 0)), axis=-1)
     dist /= variances # (tf.expand_dims(variances, 1) + tf.transpose(variances))
     mask = tf.ones([classes_num, classes_num]) - tf.eye(classes_num)

@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 
 plt.switch_backend("agg")
 
-from sklearn.metrics import adjusted_rand_score
+from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 from sklearn.manifold import TSNE
 from sklearn.decomposition import PCA
 
@@ -132,8 +132,9 @@ def evaluate_model(
         # print(emp_var, len(emp_var))
         emp_variances += [np.mean(np.square(emp_var))]
 
-    rand_score = adjusted_rand_score(preds, valid_set["y"].argmax(-1))
+    rand_score = adjusted_rand_score(valid_set["y"].argmax(-1), preds)
     metrics_final["rand_score"] = rand_score
+    metrics_final["nmi"] = normalized_mutual_info_score(valid_set["y"].argmax(-1), preds)
 
     # PCA
     if epoch % 5 == 0:
@@ -165,7 +166,7 @@ def evaluate_model(
 
     if epoch % 5 == 0:
         print(epoch, "Dataset:", filename_prefix, end="\t")
-        for key in ["rand_score", "cec", "erf", "reconstruction", "distance"]:
+        for key in ["nmi", "rand_score", "cec", "erf", "reconstruction", "distance"]:
             print("{}: {:.4f}".format(key, metrics_final[key]), end=" ")
         print()
 
@@ -299,7 +300,7 @@ def plot_costs(fig, costs, name):
     for key in ["reconstruction", "cec", "distance"]:
         ax_1.plot(costs[key], label=key)
 
-    for key in ["rand_score"]:
+    for key in ["rand_score", "nmi"]:
         ax_2.plot(costs[key], label=key, c="red")
 
     if first_time:
