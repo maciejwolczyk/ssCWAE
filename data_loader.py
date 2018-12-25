@@ -70,18 +70,16 @@ class Dataset:
         pair_indices = pair_indices[:pairs_num]
         print(pair_indices[0])
 
-        must_link = []
-        cannot_link = []
+        links = []
         for first_idx, second_idx in pair_indices:
             X_pair = [self.train["X"][first_idx], self.train["X"][second_idx]]
             first_y = self.train["y"][first_idx].argmax()
             second_y = self.train["y"][second_idx].argmax()
             if first_y == second_y:
-                must_link += [X_pair]
+                links += [(X_pair, True)]
             else:
-                cannot_link += [X_pair]
-        self.must_link = np.array(must_link)
-        self.cannot_link = np.array(cannot_link)
+                links += [(X_pair, False)]
+        self.links = links
 
         indices = pair_indices.reshape(-1)
         semi_labeled_X = self.train["X"][indices]

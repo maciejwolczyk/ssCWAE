@@ -68,11 +68,11 @@ def get_links_batch(batch_idx, batch_size, dataset):
     unlabeled_batch = dataset.train["X"][batch_idx * batch_size:(batch_idx + 1) * batch_size]
 
     input_dim = unlabeled_batch.shape[-1]
-    links_num = len(dataset.must_link) + len(dataset.cannot_link)
-    labeled_batch_size = min(batch_size, links_num * 2)
+    labeled_batch_size = min(batch_size, len(dataset.links) * 2)
 
     sampling = False
     if sampling:
+        # TODO: implement sampling with new batch system
         indices = np.random.choice(
             links_num, size=min(labeled_batch_size // 2, links_num),
             replace=False)
@@ -87,25 +87,21 @@ def get_links_batch(batch_idx, batch_size, dataset):
                 must_link_batch += [dataset.must_link[idx]]
     else:
         pairs_num = labeled_batch_size // 2
-        must_link_bs = min(pairs_num // 2, len(dataset.must_link))
-        cannot_link_bs = pairs_num - must_link_bs
 
-        must_link_batch = dataset.must_link[
-            batch_idx * must_link_bs:(batch_idx + 1) * must_link_bs]
-        end_idx = must_link_bs - len(must_link_batch)
-        must_link_batch = np.concatenate(
-            (must_link_batch, dataset.must_link[:end_idx]))
+        link_batch = dataset.links[
+            batch_idx * pairs_num:(batch_idx + 1) * pairs_num]
+        end_idx = labeled_batch_size - len(link_batch)
+        link_batch = link_batch + dataset.links[:end_idx]
 
-        cannot_link_batch = dataset.cannot_link[
-            batch_idx * cannot_link_bs:(batch_idx + 1) * cannot_link_bs]
-        end_idx = cannot_link_bs - len(cannot_link_batch)
-        cannot_link_batch = np.concatenate(
-            (cannot_link_batch, dataset.cannot_link[:end_idx]))
-
-    # TODO: wywal
-    # must_link_batch = dataset.must_link
-    # cannot_link_batch = dataset.cannot_link
-    # labeled_batch_size =  2 * len(must_link_batch) + 2 * len(cannot_link_batch)
+        print("\n\n\n\n", len(link_batch))
+        must_link_batch = []
+        cannot_link_batch = []
+        for link in link_batch:
+            if link[1]:
+                must_link_batch += [link[0]]
+            else:
+                cannot_link_batch += [link[0]]
+        print("must", len(must_link_batch), "cannot", len(cannot_link_batch))
 
     must_link_batch = np.array(must_link_batch).reshape(-1, input_dim)
     cannot_link_batch = np.array(cannot_link_batch).reshape(-1, input_dim)
@@ -119,6 +115,8 @@ def get_links_batch(batch_idx, batch_size, dataset):
     cannot_link_labels = np.zeros((batch_size + labeled_batch_size,))
     cannot_link_labels[batch_size + len(must_link_batch):] = 1
 
+    print(must_link_batch.shape, cannot_link_batch.shape)
+    print(must_link_labels.shape, cannot_link_labels.shape)
 
     return batch, empty_labels, must_link_labels, cannot_link_labels
 
@@ -271,11 +269,11 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
     return valid_metrics, test_metrics
 
 if __name__ == "__main__":
-    latent_dims = [200]
+    latent_dims = [256]
     distance_weights = [10., 100., 1000.]
     supervised_weights = [2.5, 5., 7.5]
     kernel_nums = [64]
-    batch_sizes = [256]
+    batch_sizes = [200]
     hidden_dims = [512]
     gammas = [1.0]
     inits = [0.1]
