@@ -1,8 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-
-
 plt.switch_backend("agg")
 
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
@@ -29,14 +27,35 @@ def draw_gmm(
     color_arr = np.array(color_arr)
 
 
-    labeled_z = z[y.sum(1) == 1]
-    unlabeled_z = z[y.sum(1) == 0]
-    p = p / p.sum()
 
-    if len(unlabeled_z) > 0:
-        plt.scatter(unlabeled_z[:, 0], unlabeled_z[:, 1], c="gray")
+    if "train" in filename:
+        must_z = []
+        cannot_z = []
+        for idx, link in self.links:
+            if link[1]:
+                must_z += [z[2 * idx:2 * idx + 2]]
+            else:
+                cannot_z += [z[2 * idx:2 * idx + 2]]
 
-    plt.scatter(labeled_z[:, 0], labeled_z[:, 1], c=color_arr[np.argmax(y, axis=1)])
+        must_z = np.array(must_z)
+        cannot_z = np.array(cannot_z)
+        print(must_z.shape, cannot_z.shape)
+
+        for must_pair in must_z:
+            plt.scatter(must_pair[:, 0], must_pair[:, 1], c="green")
+            plt.plot(must_pair[:, 0], must_pair[:, 1], c="blue")
+        for cannot_pair in cannot_z:
+            plt.scatter(cannot_pair[:, 0], cannot_pair[:, 1], c="purple")
+            plt.plot(cannot_pair[:, 0], cannot_pair[:, 1], c="red")
+
+    else:
+        labeled_z = z[y.sum(1) == 1]
+        unlabeled_z = z[y.sum(1) == 0]
+        p = p / p.sum()
+        if len(unlabeled_z) > 0:
+            plt.scatter(unlabeled_z[:, 0], unlabeled_z[:, 1], c="gray")
+
+        plt.scatter(labeled_z[:, 0], labeled_z[:, 1], c=color_arr[np.argmax(y, axis=1)])
 
     if means is not None:
         for i in range(len(means)):
