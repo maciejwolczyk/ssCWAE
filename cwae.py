@@ -806,13 +806,25 @@ def cw_distance_penalty(z_dim, means, variances, probs, classes_num, gamma):
     dist = tf.reshape(dist, [classes_num, classes_num - 1])
     return -tf.reduce_mean(tf.log(dist))
 
-def mincw_distance_penalty(self, z_dim, means, variances, classes_num):
-    n = 1
-    # gamma = tf.pow(4 / (3 * n), 0.4) * n / 10
-    gamma = self.gamma
+def mincw_distance_penalty(z_dim, means, variances, probs, classes_num, gamma):
+
+    N0 = 100
+    G = 10
+    # gamma = self.gamma
+    # gamma = 5.0 # evil trick
     var_arr = tf.expand_dims(variances, 0) + tf.expand_dims(variances, 1)
+    p_arr = tf.expand_dims(probs, 1) * tf.expand_dims(probs, 0)
+    square_probs = tf.square(probs)
+    # probs = np.ones_like(probs)
+
     means_arr = norm_squared(tf.expand_dims(means, 0) - tf.expand_dims(means, 1))
-    dist = phi_d(means_arr / (2 * (var_arr + 2 * gamma)), z_dim)
+    A = tf.expand_dims(square_probs, 0) / tf.sqrt(2 * pi * (2 * tf.expand_dims(variances, 0) + gamma))
+    B = tf.expand_dims(square_probs, 1) / tf.sqrt(2 * pi * (2 * tf.expand_dims(variances, 1) + gamma))
+    C = phi_d(means_arr / (2 * (var_arr + gamma)), z_dim)
+    C = 2 * p_arr / tf.sqrt(2 * pi * (var_arr + gamma)) * C
+    dist = A + B - C
+
     mask = tf.ones([classes_num, classes_num]) - tf.eye(classes_num)
     dist = tf.boolean_mask(dist, tf.cast(mask, tf.bool))
-    return tf.log(tf.reduce_max(dist))
+    dist = tf.reshape(dist, [classes_num, classes_num - 1])
+    return -tf.log(tf.reduce_min(dist))

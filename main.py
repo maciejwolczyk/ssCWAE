@@ -64,11 +64,14 @@ def get_batch(batch_idx, batch_size, dataset):
     y_batch = np.vstack((empty_labels, y_labeled))
     return X_batch, y_batch
 
-def get_links_batch(batch_idx, batch_size, dataset):
+def get_links_batch(batch_idx, batch_size, dataset, dummy_links):
     unlabeled_batch = dataset.train["X"][batch_idx * batch_size:(batch_idx + 1) * batch_size]
 
     input_dim = unlabeled_batch.shape[-1]
-    labeled_batch_size = min(batch_size, len(dataset.links) * 2)
+    if dummy_links:
+        labeled_batch_size = 0
+    else:
+        labeled_batch_size = min(batch_size, len(dataset.links) * 2)
 
     sampling = False
     if sampling:
@@ -90,10 +93,9 @@ def get_links_batch(batch_idx, batch_size, dataset):
 
         link_batch = dataset.links[
             batch_idx * pairs_num:(batch_idx + 1) * pairs_num]
-        end_idx = labeled_batch_size - len(link_batch)
+        end_idx = pairs_num - len(link_batch)
         link_batch = link_batch + dataset.links[:end_idx]
 
-        print("\n\n\n\n", len(link_batch))
         must_link_batch = []
         cannot_link_batch = []
         for link in link_batch:
@@ -101,7 +103,6 @@ def get_links_batch(batch_idx, batch_size, dataset):
                 must_link_batch += [link[0]]
             else:
                 cannot_link_batch += [link[0]]
-        print("must", len(must_link_batch), "cannot", len(cannot_link_batch))
 
     must_link_batch = np.array(must_link_batch).reshape(-1, input_dim)
     cannot_link_batch = np.array(cannot_link_batch).reshape(-1, input_dim)
@@ -114,9 +115,6 @@ def get_links_batch(batch_idx, batch_size, dataset):
 
     cannot_link_labels = np.zeros((batch_size + labeled_batch_size,))
     cannot_link_labels[batch_size + len(must_link_batch):] = 1
-
-    print(must_link_batch.shape, cannot_link_batch.shape)
-    print(must_link_labels.shape, cannot_link_labels.shape)
 
     return batch, empty_labels, must_link_labels, cannot_link_labels
 
@@ -143,7 +141,7 @@ def train_model(
 
     model_name = (
         "{}/{}/{}d_cwdist_dw{}_kn{}_hd{}_bs{}_sw{}" +
-        "_{}links_e25_nonorm_batch_lr2e3_rng{}_replace_rep2").format(
+        "_{}links_nolinks15_e25_nonorm_rng{}").format(
             dataset.name, coder.__class__.__name__, latent_dim,
             distance_weight, kernel_num, h_dim,
             batch_size, supervised_weight, links_num, rng_seed)
@@ -187,8 +185,11 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
     # dataset.unlabeled_train if not links
 
     for batch_idx in trange(batches_num, leave=False):
+        # TODO: linki dopiero po 10 epokach
+
+        dummy_links = epoch_n < 15
         X_batch, y_batch, must_link, cannot_link = get_links_batch(
-                batch_idx, batch_size, dataset)
+                batch_idx, batch_size, dataset, dummy_links)
         if dataset.name == "mnist" and False:
             noisy_X_batch = apply_bernoulli_noise(X_batch)
         else:
@@ -270,11 +271,11 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
 
 if __name__ == "__main__":
     latent_dims = [256]
-    distance_weights = [10., 100., 1000.]
-    supervised_weights = [2.5, 5., 7.5]
-    kernel_nums = [64]
+    distance_weights = [100.]
+    supervised_weights = [5.]
+    kernel_nums = [16, 32]
     batch_sizes = [200]
-    hidden_dims = [512]
+    hidden_dims = [64, 128]
     gammas = [1.0]
     inits = [0.1]
     rng_seeds = [21]

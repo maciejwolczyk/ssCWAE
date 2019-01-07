@@ -76,6 +76,8 @@ class Dataset:
             first_y = self.train["y"][first_idx].argmax()
             second_y = self.train["y"][second_idx].argmax()
             if first_y == second_y:
+                plt.imshow(X_pair[0].reshape(28, 28))
+                plt.imshow(X_pair[1].reshape(28, 28))
                 links += [(X_pair, True)]
             else:
                 links += [(X_pair, False)]

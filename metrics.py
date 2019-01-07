@@ -31,7 +31,7 @@ def draw_gmm(
     if "train" in filename:
         must_z = []
         cannot_z = []
-        for idx, link in self.links:
+        for idx, link in enumerate(dataset.links):
             if link[1]:
                 must_z += [z[2 * idx:2 * idx + 2]]
             else:
