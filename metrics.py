@@ -1,8 +1,5 @@
 import numpy as np
 import matplotlib.pyplot as plt
-
-
-
 plt.switch_backend("agg")
 
 from sklearn.metrics import adjusted_rand_score
@@ -36,7 +33,8 @@ def draw_gmm(
     if len(unlabeled_z) > 0:
         plt.scatter(unlabeled_z[:, 0], unlabeled_z[:, 1], c="gray")
 
-    plt.scatter(labeled_z[:, 0], labeled_z[:, 1], c=color_arr[np.argmax(y, axis=1)])
+    c = color_arr[np.argmax(y, axis=1)[:len(labeled_z)]]
+    plt.scatter(labeled_z[:, 0], labeled_z[:, 1], c=c)
 
     if means is not None:
         for i in range(len(means)):
@@ -73,10 +71,10 @@ def evaluate_model(
     metrics_tensors = {
         "cramer-wold": model.costs["cw"],
         "reconstruction": model.costs["reconstruction"],
-        # "classification": model.costs["class"],
+        "classification": model.costs["class"],
         "distance": model.costs["distance"],
         "erf": model.costs["erf"],
-        "cec": model.costs["cec"],
+        "gmm": model.costs["gmm"],
         "sum": cost_sum
     }
 
@@ -98,10 +96,7 @@ def evaluate_model(
 
         feed_dict = {
                 model.placeholders["X"]: X_batch,
-                model.placeholders["X_target"]: X_batch,
                 model.placeholders["y"]: y_batch,
-                model.placeholders["must_link"]: np.zeros((len(X_batch),)),
-                model.placeholders["cannot_link"]: np.zeros((len(X_batch),)),
                 model.placeholders["training"]: training_mode}
 
         metrics, class_logits, out_z = sess.run(
@@ -165,7 +160,7 @@ def evaluate_model(
 
     if epoch % 5 == 0:
         print(epoch, "Dataset:", filename_prefix, end="\t")
-        for key in ["rand_score", "cec", "erf", "reconstruction", "distance"]:
+        for key in ["accuracy", "gmm", "erf", "reconstruction", "distance", "classification"]:
             print("{}: {:.4f}".format(key, metrics_final[key]), end=" ")
         print()
 
@@ -216,6 +211,7 @@ def sample_from_classes(sess, model, dataset, epoch, valid_var=None, show_only=F
             filename = "results/{}/sampling_{}.png".format(
                     model.name, str(epoch).zfill(3))
         plt.savefig(filename, bbox_inches='tight', pad_inches=0)
+        plt.close()
 
 def inter_class_interpolation(sess, model, dataset, epoch, show_only=False):
     pass
@@ -240,9 +236,11 @@ def interpolation(sess, model, dataset, epoch, show_only=False):
     for i, yi in enumerate(y_values):
         x_sample = dataset.test["X"][out_z[i]]
 
-        out_z1 = sess.run(
-                model.out["z"],
-                {model.placeholders["X"]: x_sample})
+        feed_dict = {
+            model.placeholders["X"]: x_sample,
+            model.placeholders["y"]: np.zeros((len(x_sample), dataset.classes_num))
+        }
+        out_z1 = sess.run(model.out["z"], feed_dict)
         #self.model.encode(x_sample)
         codings_rnd = out_z1[0]
         target_codings = out_z1[1]
@@ -280,6 +278,7 @@ def interpolation(sess, model, dataset, epoch, show_only=False):
         filename = "results/{}/interpolation_{}.png".format(
             model.name, str(epoch).zfill(3))
         plt.savefig(filename, bbox_inches='tight', pad_inches=0)
+    plt.close()
 
 
 def plot_costs(fig, costs, name):
@@ -296,15 +295,17 @@ def plot_costs(fig, costs, name):
     ax_2.clear()
     ax_1.set_title(name)
 
-    for key in ["classification", "erf", "cec", "distance"]:
+    for key in ["classification", "erf", "gmm", "distance"]:
         ax_1.plot(costs[key], label=key)
 
-    for key in ["rand_score"]:
+    for key in ["accuracy"]:
+        ax_2.set_ylim(0, 1)
         ax_2.plot(costs[key], label=key, c="red")
 
     if first_time:
         fig.legend(loc=3)
     fig.canvas.draw()
+    plt.close(fig)
 
 def save_costs(model, costs, dataset_type):
     cost_dict = {k: [] for k in costs[0].keys()}
@@ -316,6 +317,7 @@ def save_costs(model, costs, dataset_type):
     plot_costs(fig, cost_dict, dataset_type)
     results_dir = "results/{}".format(model.name)
     fig.savefig(results_dir + "/{}_losses.png".format(dataset_type))
+    plt.close(fig)
 
     costs_arr = list((key, val) for key, val in cost_dict.items())
 
