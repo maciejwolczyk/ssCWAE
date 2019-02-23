@@ -131,20 +131,24 @@ def evaluate_model(
     metrics_final["rand_score"] = rand_score
 
     # PCA
-    if epoch % 5 == 0:
-        if model.z_dim == 2: # If we're on a plane, PCA is not necessary
-            pca_results = all_z
-            pca_means = means_val
-        else:
-            pca = PCA(2)
-            pca_results = pca.fit_transform(all_z)
-            pca_means = pca.transform(means_val)
+    try:
+        if epoch % 5 == 0:
+            if model.z_dim == 2: # If we're on a plane, PCA is not necessary
+                pca_results = all_z
+                pca_means = means_val
+            else:
+                pca = PCA(2)
+                pca_results = pca.fit_transform(all_z)
+                pca_means = pca.transform(means_val)
 
-        graph_filename = "results/{}/graphs/{}_epoch_{}.png".format(
-                model.name, filename_prefix, str(epoch).zfill(3))
-        draw_gmm(pca_results, valid_set["y"], dataset,
-                 pca_means, alphas_val, p_val, lims=False,
-                 filename=graph_filename)
+            graph_filename = "results/{}/graphs/{}_epoch_{}.png".format(
+                    model.name, filename_prefix, str(epoch).zfill(3))
+            draw_gmm(pca_results, valid_set["y"], dataset,
+                     pca_means, alphas_val, p_val, lims=False,
+                     filename=graph_filename)
+    except ValueError as e:
+        print(e)
+
     # T-SNE
     # if epoch % 10 == 0:
     #     tsne = TSNE(2)

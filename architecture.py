@@ -809,13 +809,13 @@ class FCClassifierCoder():
     def __init__(self, dataset, h_dim=400):
         self.h_dim = h_dim
         self.image_shape = dataset.image_shape
-        self.hidden_dims = [h_dim, h_dim]
+        self.hidden_dims = [h_dim]
 
     def encode(self, x, y, z_dim, training=False):
         hd = self.hidden_dims[0]
-        h = tf.nn.relu(tfl.dense(x, units=hd) + tfl.dense(y, units=hd))
+        h = tf.nn.softplus(tfl.dense(x, units=hd) + tfl.dense(y, units=hd))
         for hd in self.hidden_dims[1:]:
-            h = tfl.dense(h, units=hd, activation=tf.nn.relu)
+            h = tfl.dense(h, units=hd, activation=tf.nn.softplus)
             # h = tfl.batch_normalization(h, training=training)
         z_mean = tfl.dense(h, units=z_dim, name='z_mean')
         return z_mean
@@ -823,7 +823,7 @@ class FCClassifierCoder():
     def decode(self, z, x_dim, training=False):
         h = z
         for hd in reversed(self.hidden_dims):
-            h = tfl.dense(h, units=hd, activation=tf.nn.relu)
+            h = tfl.dense(h, units=hd, activation=tf.nn.softplus)
         y_mean = tfl.dense(h, units=x_dim, name='y_mean', activation=tf.nn.sigmoid)
         return y_mean
 
@@ -831,13 +831,13 @@ class FCCoder():
     def __init__(self, dataset, h_dim=500):
         self.h_dim = h_dim
         self.image_shape = dataset.image_shape
-        self.hidden_dims = [h_dim, h_dim]
+        self.hidden_dims = [h_dim]
 
     def encode(self, x, z_dim, training=False):
         with tf.variable_scope("encoder", reuse=tf.AUTO_REUSE):
             h = x
             for hd in self.hidden_dims:
-                h = tfl.dense(h, units=hd, activation=tf.nn.relu)
+                h = tfl.dense(h, units=hd, activation=tf.nn.softplus)
                 # h = tfl.batch_normalization(h, training=training)
             z_mean = tfl.dense(h, units=z_dim, name='z_mean')
             return z_mean
@@ -846,7 +846,7 @@ class FCCoder():
         with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
             h = z
             for hd in reversed(self.hidden_dims):
-                h = tfl.dense(h, units=hd, activation=tf.nn.relu)
+                h = tfl.dense(h, units=hd, activation=tf.nn.softplus)
                 # h = tfl.batch_normalization(h, training=training)
             y_mean = tfl.dense(h, units=x_dim, name='y_mean', activation=tf.nn.sigmoid)
             return y_mean

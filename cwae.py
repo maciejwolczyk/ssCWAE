@@ -4,6 +4,8 @@ import tensorflow.layers as tfl
 import tensorflow.train as tft
 from math import pi
 
+import architecture
+
 def cramer_wold_distance(X, m, alpha, p, gamma):
     N = tf.cast(tf.shape(X)[0], tf.float32)
     D = tf.cast(tf.shape(X)[1], tf.float32)
@@ -99,34 +101,66 @@ class EntropyClassifier:
 
 
 class CwaeClassifier:
-    def __init__(self, tensor_x, dataset):
-
+    def __init__(self, tensor_x, tensor_labels, labeled_mask,
+                 dataset, tensor_distance_weight, tensor_training,
+                 z_dim=100):
         with tf.variable_scope("gmm_classifier"):
             self.dataset = dataset
-            self.coder = WideShaoCoder(dataset)
-            self.build_graph(tensor_x)
+            self.coder = architecture.FCCoder(dataset)
+            self.build_graph(
+                tensor_x, tensor_labels, labeled_mask,
+                tensor_distance_weight, tensor_training, z_dim)
 
-    def build_graph(self, tensor_x):
-        # TODO: z_dim
+    def build_graph(
+            self, tensor_x, tensor_labels, labeled_mask,
+            tensor_distance_weight, tensor_training, z_dim):
 
-        means, variances, probs = get_gaussians(z_dim, init, dataset)
+        N0 = tf.shape(tensor_x)[0] 
+        # D = tf.shape(tensor_x)[-1]
+        gamma = tf.cast(tf.pow(4 / (3 * N0 / self.dataset.classes_num), 0.4), tf.float32)
+        means, variances, probs = get_gaussians(z_dim, 0.1, self.dataset)
+
         tensor_z = self.coder.encode(tensor_x, z_dim)
-        tensor_y = self.coder.decode(tensor_z, z_dim)
+        tensor_y = self.coder.decode(tensor_z, self.dataset.x_dim)
 
         rec_cost = norm_squared(tensor_x - tensor_y, axis=-1)
         cw_cost = cramer_wold_distance(
                 tensor_z, means, variances, probs, gamma)
         log_cw_cost = tf.log(1e-6 + cw_cost)
 
-        class_logits = calculate_logits(tensor_z, means, variances, probs)
-        class_probs = tf.nn.softmax(class_logits)
-        class_cost = calculate_logits_cost(
-            class_logits, tensor_labels, labeled_mask, eps=eps)
-        dist_cost = linear_distance_penalty(
-            z_dim, means, variances, probs, dataset.classes_num)
+        tensor_logits = calculate_logits(tensor_z, means, variances, probs)
+        tensor_probs = tf.nn.softmax(tensor_logits)
 
-        full_cost = rec_cost + log_cw_cost + class_cost + dist_cost
-        # TODO: dokonczyc
+        class_cost = calculate_logits_cost(
+            tensor_logits, tensor_labels, labeled_mask)
+        dist_cost = linear_distance_penalty(
+            z_dim, means, variances, probs, self.dataset.classes_num)
+
+        full_cost = rec_cost + log_cw_cost + class_cost + tensor_distance_weight * dist_cost
+
+        tensor_logits = tf.cond(
+                tensor_training,
+                lambda: tf.where(labeled_mask, tensor_labels, tensor_logits),
+                lambda: tensor_logits)
+        tensor_probs = tf.cond(
+                tensor_training,
+                lambda: tf.where(labeled_mask, tensor_labels, tf.nn.softmax(tensor_logits)),
+                lambda: tensor_logits)
+
+        self.costs = {
+            "full": full_cost,
+            "class": class_cost,
+            "cw_cost": cw_cost,
+            "reconstruction": rec_cost,
+            "distance": dist_cost
+        }
+
+        self.out = {
+            "logits": tensor_logits,
+            "probs": tensor_probs
+        }
+
+        return full_cost
 
 
 class CwaeModel():
@@ -134,7 +168,8 @@ class CwaeModel():
         self, name, coder, dataset, latent_dim=300,
         supervised_weight=1.0, distance_weight=1.0,
         erf_weight=1.0, erf_alpha=0.05,
-        optimizer=tft.AdamOptimizer(1e-3),
+        optimizer=tft.AdamOptimizer(1e-4),
+        classifier_cls=EntropyClassifier, classifier_distance_weight=1.0,
         eps=1e-2, init=1.0, gamma=1.0, labeled_super_weight=2.0):
 
         tf.reset_default_graph()
@@ -144,6 +179,7 @@ class CwaeModel():
         gamma_weight = gamma
         self.coder = coder
         self.optimizer = optimizer
+        self.classifier_cls = classifier_cls
 
         im_h, im_w, im_c = dataset.image_shape
         x_dim = dataset.x_dim
@@ -160,16 +196,27 @@ class CwaeModel():
 
         train_labeled = tf.placeholder_with_default(True, shape=[])
         tensor_distance_weight = tf.placeholder_with_default(distance_weight, shape=[])
+        tensor_classifier_distance_weight = tf.placeholder_with_default(classifier_distance_weight, shape=[])
         tensor_supervised_weight = tf.placeholder_with_default(supervised_weight, shape=[])
         tensor_erf_weight = tf.placeholder_with_default(erf_weight, shape=[])
         tensor_training = tf.placeholder_with_default(False, shape=[])
 
         labeled_mask = self.get_labels_mask(tensor_labels)
 
-        classifier = EntropyClassifier(
+        classifier = self.classifier_cls(
                 tensor_x, tensor_labels, labeled_mask,
                 dataset, tensor_training, labeled_super_weight)
+                # tensor_classifier_distance_weight)
         class_cost = classifier.costs["full"]
+
+        # nowa metoda:
+        # y = wylosowany wektor sumujący się do 1
+        # cat_dist = tf.distributions.Categorical(probs=[1 / dataset.classes_num] * dataset.classes_num)
+        # y = cat_dist.sample(1)
+        # w y stawiamy gaussa N(0, sigma) i sprawdzamy N(0, sigma)(p(.|y)) z class-probs
+        # to wszystko wrzucamy do enkodera, ktory wypluwa nam tensor_z
+        # normalizujemy odleglosc pomiedzy N(0, 1) z gaussem v_i N(z_i, gamma I)
+        # cieszymy sie
 
         # Coder and decoder
         tensor_z = coder.encode(tensor_x, classifier.out["probs"], z_dim, tensor_training)
@@ -192,6 +239,7 @@ class CwaeModel():
 
         class_logits = classifier.out["logits"]
         class_probs = classifier.out["probs"]
+
 
         # Old Cramer-Wold cost
         cw_cost = cramer_wold_distance(
@@ -229,9 +277,10 @@ class CwaeModel():
                 + log_cw_cost
                 + tensor_distance_weight * distance_cost)
 
+        gmm_weight = 1.
         full_gmm_cost = tf.reduce_mean(
                 rec_cost
-                + gmm_cost
+                + gmm_weight * gmm_cost
                 # + log_cw_cost
                 + tensor_supervised_weight * class_cost
                 + tensor_distance_weight * distance_cost
@@ -287,6 +336,7 @@ class CwaeModel():
             "y": tensor_labels,
             "train_labeled": train_labeled,
             "distance_weight": tensor_distance_weight,
+            "classifier_distance_weight": tensor_distance_weight,
             "erf_weight": tensor_erf_weight,
             "supervised_weight": tensor_supervised_weight,
             "training": tensor_training,
@@ -437,7 +487,7 @@ class CwaeModel():
                     labels=tf.eye(dataset.classes_num), logits=logits)
             cwae_sum *= probs
         else:
-            cwae_sum = -tf.reduce_mean(tf.diag_part(logits))
+            cwae_sum = -tf.reduce_sum(tf.diag_part(logits))
 
 
         return tf.reduce_sum(cwae_sum)
@@ -665,6 +715,7 @@ def get_gaussians(z_dim, init, dataset):
     G = dataset.classes_num
     with tf.variable_scope("gmm", reuse=tf.AUTO_REUSE):
         np.random.seed(25)
+        print(init, G, z_dim)
         means_initialization = tf.constant_initializer(
             np.random.normal(0, init, size=(G, z_dim)))
         np.random.seed()
@@ -802,7 +853,8 @@ def calculate_logits_cost(
     denominator = tf.reduce_sum(tensor_target)
     denominator = tf.cond(tf.equal(denominator, 0), lambda: tf.constant(1, tf.float32), lambda: denominator)
     # class_cost_fin = tf.reduce_mean(class_cost * non_zero_indices)
-    class_cost_fin = tf.reduce_sum(class_cost * labeled_mask) / denominator
+
+    class_cost_fin = tf.reduce_mean(tf.boolean_mask(class_cost, labeled_mask))
     return class_cost_fin
 
 # =================================================

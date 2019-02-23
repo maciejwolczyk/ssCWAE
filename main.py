@@ -15,6 +15,7 @@ import cwae
 import data_loader
 import metrics
 
+# TODO: dlaczego scatterploty z FCClassifier wygladaja tak dziwnie?
 
 frugal_config = tf.ConfigProto(gpu_options=tf.GPUOptions(allow_growth=True))
 
@@ -82,14 +83,18 @@ def train_model(
     #         kernel_size=3,
     #         kernel_num=kernel_num)
 
-    coder = architecture.FCClassifierCoder(dataset, h_dim=h_dim)
+    # coder = architecture.WideShaoClassifierCoder(
+    #     dataset, kernel_num=kn, h_dim=h_dim)
+    coder = architecture.FCClassifierCoder(
+        dataset, h_dim=h_dim)
+    classifier_cls = cwae.EntropyClassifier
 
     model_name = (
-        "{}/{}/{}d_lindist_erfw{}_kn{}_hd{}_bs{}_sw{}_lsw{}" +
-        "_realgmmlike_cw_good").format(
-            dataset.name, coder.__class__.__name__, latent_dim,
-            erf_weight, kernel_num, h_dim,
-            batch_size, supervised_weight, labeled_super_weight)
+        "{}/{}/{}_fc/{}d_lindist_erfw{}_kn{}_hd{}_bs{}_sw{}_lsw{}_a{}" +
+        "_gmmsum").format(
+            dataset.name, coder.__class__.__name__, classifier_cls.__name__,
+            latent_dim, erf_weight, kernel_num, h_dim,
+            batch_size, supervised_weight, labeled_super_weight, erf_alpha)
 
     print(model_name)
     prepare_directories(model_name)
@@ -99,7 +104,7 @@ def train_model(
             latent_dim=latent_dim,
             supervised_weight=supervised_weight,
             distance_weight=distance_weight, eps=cc_ep,
-            init=init, gamma=gamma,
+            init=init, gamma=gamma, classifier_cls=classifier_cls,
             erf_weight=erf_weight, erf_alpha=erf_alpha,
             labeled_super_weight=labeled_super_weight)
 
@@ -131,6 +136,7 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
 
     for batch_idx in trange(batches_num, leave=False):
         X_batch, y_batch = get_batch(batch_idx, batch_size, dataset)
+        X_batch = apply_bernoulli_noise(X_batch)
 
         feed_dict = feed_dict={
             model.placeholders["X"]: X_batch,
@@ -142,6 +148,8 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
 
         if epoch_n < 20:
             feed_dict[model.placeholders["erf_weight"]] = 0
+            feed_dict[model.placeholders["classifier_distance_weight"]] = 0
+
 
         # if epoch_n < 35:
         #     feed_dict[model.placeholders["distance_weight"]] = 0
@@ -197,19 +205,19 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
     return train_metrics, valid_metrics, test_metrics
 
 if __name__ == "__main__":
-    latent_dims = [50, 100, 200]
-    distance_weights = [1.0]
-    supervised_weights = [1.0,]
-    kernel_nums = [0.]
-    batch_sizes = [100, 200, 500]
-    hidden_dims = [500]
+    latent_dims = [50, 100, 150]
+    distance_weights = [0.0]
+    supervised_weights = [1.0, 0.5, 2.0]
+    kernel_nums = [0]
+    batch_sizes = [1000]
+    hidden_dims = [500, 300]
     gammas = [1.0]
     inits = [0.01]
     cc_eps = [0.0]
-    labeled_super_weights = [1.0, 2.0, 4.0]
+    labeled_super_weights = [1.0, 5.0, 10., 20.]
     rng_seeds = [20]
     erf_weights = [0., 10.]
-    alphas = [1e-6]
+    alphas = [1e-4, 1e-2, 5e-2]
 
     for hyperparams in itertools.product(
             latent_dims, kernel_nums, distance_weights,
