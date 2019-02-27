@@ -51,18 +51,24 @@ class Dataset:
         self.whitened = True
         self.mean = self.train["X"].mean(axis=0)
         # self.std = 1
-        self.x_dim = 600
+        std = self.train["X"].std(axis=0)
+        self.filtered = np.where(std > 0.1)
+        self.train["X"] = self.train["X"][:, std > 0.1]
+        self.test["X"] = self.test["X"][:, std > 0.1]
+        self.x_dim = len(self.train["X"][0])
+        print("X DIM", self.x_dim)
 
         # self.train["X"] = (self.train["X"] - self.mean)
         # self.test["X"] = (self.test["X"] - self.mean)
-        pca = PCA(n_components=self.x_dim, whiten=False)
-        pca.fit(self.train["X"])
-        self.train["X"] = pca.transform(self.train["X"])
-        self.test["X"] = pca.transform(self.test["X"])
-        self.pca = pca
+        # pca = PCA(n_components=self.x_dim, whiten=False)
+        # pca.fit(self.train["X"])
+        # self.train["X"] = pca.transform(self.train["X"])
+        # self.test["X"] = pca.transform(self.test["X"])
 
     def blackening(self, X):
-        return self.pca.inverse_transform(X)
+        output = self.mean
+        output[self.filtered] = X
+        return output
 
     def load_links(self, pairs_num):
         pair_indices = self.rng.choice(
@@ -162,11 +168,11 @@ class Dataset:
 
         # Kolejnosc
 
-        # remain_indices = np.where(remain_indices)
-        # self.rng.shuffle(remain_indices)
-        # removed_indices = np.where(removed_indices)
-        # self.rng.shuffle(removed_indices)
-        #
+        remain_indices = np.where(remain_indices)
+        self.rng.shuffle(remain_indices)
+        removed_indices = np.where(removed_indices)
+        self.rng.shuffle(removed_indices)
+
         self.labeled_train = {"X": self.train["X"][remain_indices],
                               "y": self.train["y"][remain_indices]}
         self.unlabeled_train = {"X": self.train["X"][removed_indices]}
@@ -192,7 +198,6 @@ def get_mnist():
     mnist_train, mnist_test = tf.keras.datasets.mnist.load_data()
     labels = list(str(i) for i in range(10))
     return mnist_train, mnist_test, labels, "mnist"
-
 
 
 def get_fashion_mnist():

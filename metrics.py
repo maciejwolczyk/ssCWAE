@@ -75,6 +75,7 @@ def evaluate_model(
         "distance": model.costs["distance"],
         "erf": model.costs["erf"],
         "gmm": model.costs["gmm"],
+        "norm": model.costs["norm"],
         "sum": cost_sum
     }
 
@@ -164,7 +165,7 @@ def evaluate_model(
 
     if epoch % 5 == 0:
         print(epoch, "Dataset:", filename_prefix, end="\t")
-        for key in ["accuracy", "gmm", "erf", "reconstruction", "distance", "classification"]:
+        for key in ["accuracy", "gmm", "norm", "erf", "reconstruction", "distance", "classification"]:
             print("{}: {:.4f}".format(key, metrics_final[key]), end=" ")
         print()
 
@@ -183,10 +184,32 @@ def sample_from_classes(sess, model, dataset, epoch, valid_var=None, show_only=F
         print("Analytic variances", alphas_val)
 
     canvas = np.empty((im_h * dataset.classes_num, im_w * 10, im_c))
+    dim = len(means_val[0])
+    samples = np.random.multivariate_normal(
+        [0.] * dim, np.eye(dim), size=10)
     for row_idx, (mean, cov) in enumerate(zip(means_val, alphas_val)):
-        dim = len(mean)
-        samples = np.random.multivariate_normal(mean, cov * np.eye(dim), size=10)
-        generated = sess.run(model.out["y"], {model.out["z"]: samples})
+
+        # TODO: jak samplujemy? zapytac Marka najlepiej
+        classifier_sample = False
+        if classifier_sample:
+            one_hot_class = [0.] * 10
+            one_hot_class[row_idx] = 1.
+            generated = sess.run(model.out["y"], 
+                {
+                    model.out["z"]: samples,
+                    model.out["simplex_y"]: one_hot_class
+                }
+            )
+        else:
+            one_hot_class = [0.] * 10
+            one_hot_class[row_idx] = 1.
+            one_hot_class = [one_hot_class] * 10
+            samples = np.random.multivariate_normal(mean, cov * np.eye(dim), size=10)
+            generated = sess.run(model.out["y"], {
+                model.out["z"]: samples,
+                model.out["probs"]: one_hot_class
+                }
+            )
 
         for col_idx, sample in enumerate(generated):
             if dataset.whitened:
@@ -223,6 +246,7 @@ def inter_class_interpolation(sess, model, dataset, epoch, show_only=False):
 
 def interpolation(sess, model, dataset, epoch, show_only=False):
     out_z=[[1,2],[3,4],[5,6],[7,8],[9,10],[11,12],[13,14],[15,16],[15,17],[18,1]]
+    # TODO: przejrzyj to
 
     nx = 10
     ny = 10
@@ -239,10 +263,14 @@ def interpolation(sess, model, dataset, epoch, show_only=False):
     canvas = np.empty((im_h * ny, im_w * nx, im_c))
     for i, yi in enumerate(y_values):
         x_sample = dataset.test["X"][out_z[i]]
+        y_sample = dataset.test["y"][out_z[i]]
 
+        one_hot_class = [0.1] * 10
         feed_dict = {
             model.placeholders["X"]: x_sample,
-            model.placeholders["y"]: np.zeros((len(x_sample), dataset.classes_num))
+            model.placeholders["y"]: np.zeros((len(x_sample), dataset.classes_num)),
+            model.out["simplex_y"]: one_hot_class,
+            model.out["probs"]: y_sample
         }
         out_z1 = sess.run(model.out["z"], feed_dict)
         #self.model.encode(x_sample)
@@ -250,12 +278,20 @@ def interpolation(sess, model, dataset, epoch, show_only=False):
         target_codings = out_z1[1]
 
         A = np.array(codings_rnd)
+        B = np.array(y_sample[0])
         for iteration in np.arange(1,n_iterations):
             codings_interpolate = codings_rnd + (target_codings - codings_rnd) * iteration / n_iterations
-            A = np.vstack([A,codings_interpolate])
+            y_interpolate = y_sample[0] + (y_sample[1] - y_sample[0]) * iteration / n_iterations
+            B = np.vstack([B, y_interpolate])
+            A = np.vstack([A, codings_interpolate])
 
 
-        y1 = sess.run(model.out["y"], {model.out["z"]: A})
+        y1 = sess.run(model.out["y"], {
+            model.out["z"]: A,
+            model.out["simplex_y"]: one_hot_class,
+            model.out["probs"]: B
+            }
+        )
 
         for j, xi in enumerate(x_values):
             d_plot = y1[j]

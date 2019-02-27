@@ -73,7 +73,7 @@ def train_model(
 
 
     dataset = data_loader.get_dataset_by_name(dataset_name, rng_seed=rng_seed)
-    # dataset.whitening()
+    dataset.whitening()
     dataset.remove_labels_fraction(
             number_to_keep=labeled_examples_n,
             keep_labels_proportions=True, batch_size=100)
@@ -87,14 +87,15 @@ def train_model(
     #     dataset, kernel_num=kn, h_dim=h_dim)
     coder = architecture.FCClassifierCoder(
         dataset, h_dim=h_dim)
-    classifier_cls = cwae.EntropyClassifier
+    classifier_cls = cwae.CwaeClassifier
 
     model_name = (
-        "{}/{}/{}_fc/{}d_lindist_erfw{}_kn{}_hd{}_bs{}_sw{}_lsw{}_a{}" +
-        "_gmmsum").format(
+        "{}/{}/{}_fc/{}d_lindist_erfw{}_kn{}_hd{}_bs{}_sw{}_lsw{}_a{}_gw{}" +
+        "_gmm_wait_cwaeclass").format(
             dataset.name, coder.__class__.__name__, classifier_cls.__name__,
             latent_dim, erf_weight, kernel_num, h_dim,
-            batch_size, supervised_weight, labeled_super_weight, erf_alpha)
+            batch_size, supervised_weight, labeled_super_weight, erf_alpha,
+            gamma)
 
     print(model_name)
     prepare_directories(model_name)
@@ -146,8 +147,10 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
         if batch_idx % 300:
             feed_dict[model.placeholders["train_labeled"]] = False
 
-        if epoch_n < 20:
+        if epoch_n < 30:
             feed_dict[model.placeholders["erf_weight"]] = 0
+
+        if epoch_n < 5:
             feed_dict[model.placeholders["classifier_distance_weight"]] = 0
 
 
@@ -178,6 +181,7 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
         #         (np.expand_dims(means, 0) - np.expand_dims(means, 1)) ** 2, axis=-1)[0], dist, "\n")
 
 
+    # TODO: przez training mode zawsze mamy accuracy 1.0
     train_metrics, _ = metrics.evaluate_model(
         sess, model, dataset.semi_labeled_train,
         epoch_n, dataset, filename_prefix="train",
@@ -197,7 +201,7 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
                 sess, "weights/dataset_mnist_wae/epoch=%d.ckpt" % (epoch_n))
         print("Model saved in path: {}".format(save_path))
 
-    if epoch_n % 10 == 0 and epoch_n > 1:
+    if epoch_n % 10 == 0:
         metrics.interpolation(sess, model, dataset, epoch_n)
         metrics.sample_from_classes(sess, model, dataset, epoch_n, valid_var)
         metrics.sample_from_classes(sess, model, dataset, epoch_n, valid_var=None)
@@ -205,19 +209,21 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
     return train_metrics, valid_metrics, test_metrics
 
 if __name__ == "__main__":
-    latent_dims = [50, 100, 150]
-    distance_weights = [0.0]
-    supervised_weights = [1.0, 0.5, 2.0]
+    latent_dims = [20]
+    distance_weights = [10.0]
+    supervised_weights = [0.1, 0.5, 1.0, 2.0]
+    # supervised_weights = [1.0, 0.5, 2.0]
     kernel_nums = [0]
-    batch_sizes = [1000]
-    hidden_dims = [500, 300]
+    batch_sizes = [500, 200]
+    hidden_dims = [100, 300, 500]
     gammas = [1.0]
     inits = [0.01]
     cc_eps = [0.0]
-    labeled_super_weights = [1.0, 5.0, 10., 20.]
+    # labeled_super_weights = [1.0]
+    labeled_super_weights = [0.]
     rng_seeds = [20]
-    erf_weights = [0., 10.]
-    alphas = [1e-4, 1e-2, 5e-2]
+    erf_weights = [10.]
+    alphas = [1e-3]
 
     for hyperparams in itertools.product(
             latent_dims, kernel_nums, distance_weights,
