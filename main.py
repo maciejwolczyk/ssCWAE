@@ -63,6 +63,8 @@ def get_batch(batch_idx, batch_size, dataset):
 
     X_batch = np.vstack((unlabeled_batch, X_labeled))
     y_batch = np.vstack((empty_labels, y_labeled))
+    # X_batch = X_labeled
+    # y_batch = y_labeled
     return X_batch, y_batch
 
 def train_model(
@@ -85,16 +87,16 @@ def train_model(
 
     # coder = architecture.WideShaoClassifierCoder(
     #     dataset, kernel_num=kn, h_dim=h_dim)
-    coder = architecture.FCClassifierCoder(
-        dataset, h_dim=h_dim)
+    coder = architecture.FCCoder(
+        dataset, h_dim=h_dim, layers_num=kernel_num)
     classifier_cls = cwae.CwaeClassifier
 
     model_name = (
-        "{}/{}/{}_fc/{}d_lindist_erfw{}_kn{}_hd{}_bs{}_sw{}_lsw{}_a{}_gw{}" +
-        "_gmm_wait_cwaeclass").format(
+        "{}/{}/{}_fc/{}d_lindist_erfw{}_hl{}_hd{}_bs{}_sw{}_dw{}_a{}_gw{}" +
+        "_simple_rectlayers_lasthalf").format(
             dataset.name, coder.__class__.__name__, classifier_cls.__name__,
             latent_dim, erf_weight, kernel_num, h_dim,
-            batch_size, supervised_weight, labeled_super_weight, erf_alpha,
+            batch_size, supervised_weight, distance_weight, erf_alpha,
             gamma)
 
     print(model_name)
@@ -131,13 +133,13 @@ def run_training(model, dataset, batch_size):
         metrics.save_costs(model, test_costs, "test")
 
 def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
-    batches_num = int(np.ceil(len(dataset.train["X"]) / batch_size))
+    # batches_num = int(np.ceil(len(dataset.train["X"]) / batch_size))
     batches_num = len(dataset.unlabeled_train["X"]) // batch_size
     # dataset.unlabeled_train if not links
 
     for batch_idx in trange(batches_num, leave=False):
         X_batch, y_batch = get_batch(batch_idx, batch_size, dataset)
-        X_batch = apply_bernoulli_noise(X_batch)
+        # X_batch = apply_bernoulli_noise(X_batch)
 
         feed_dict = feed_dict={
             model.placeholders["X"]: X_batch,
@@ -147,34 +149,22 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
         if batch_idx % 300:
             feed_dict[model.placeholders["train_labeled"]] = False
 
-        if epoch_n < 30:
+        if epoch_n < 60:
             feed_dict[model.placeholders["erf_weight"]] = 0
 
-        if epoch_n < 5:
+        if epoch_n < 35:
             feed_dict[model.placeholders["classifier_distance_weight"]] = 0
+            feed_dict[model.placeholders["distance_weight"]] = 0
 
 
-        # if epoch_n < 35:
-        #     feed_dict[model.placeholders["distance_weight"]] = 0
-        #     feed_dict[model.placeholders["supervised_weight"]] = 0
-        #     sess.run(model.train_ops["full"], feed_dict=feed_dict)
-        # elif epoch_n == 35:
-        #     sess.run(model.train_ops["means_only"], feed_dict=feed_dict)
-        # elif epoch_n < 60:
-        #     feed_dict[model.placeholders["distance_weight"]] = 0
-        #     sess.run(model.train_ops["full"], feed_dict=feed_dict)
+        sess.run(model.train_ops["full"], feed_dict=feed_dict)
+
+        # if epoch_n < 50:
+        #     sess.run(model.train_ops["class"], feed_dict=feed_dict)
+        # elif epoch_n < 100:
+        #     sess.run(model.train_ops["full_gmm_freeze"], feed_dict=feed_dict)
         # else:
-        #     sess.run(model.train_ops["full"], feed_dict=feed_dict)
-
-        sess.run(model.train_ops["full_gmm"], feed_dict=feed_dict)
-
-        # if epoch_n < 10:
-        #     sess.run(model.train_ops["rec_dkl"], feed_dict=feed_dict)
-        # elif epoch_n == 10 and batch_idx < 100:
-        #     sess.run(model.train_ops["means_only"], feed_dict=feed_dict)
-        # else:
-        #     sess.run(model.train_ops["full"], feed_dict=feed_dict)
-
+        #     sess.run(model.train_ops["full_gmm"], feed_dict=feed_dict)
 
         # if batch_idx % 50:
         #     print("\n", np.sum(
@@ -182,19 +172,23 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
 
 
     # TODO: przez training mode zawsze mamy accuracy 1.0
-    train_metrics, _ = metrics.evaluate_model(
+    train_metrics, _, _ = metrics.evaluate_model(
         sess, model, dataset.semi_labeled_train,
         epoch_n, dataset, filename_prefix="train",
         subset=3000, training_mode=True)
-    valid_metrics, valid_var = metrics.evaluate_model(
+    valid_metrics, valid_var, valid_mean = metrics.evaluate_model(
         sess, model, dataset.train,
         epoch_n, dataset, filename_prefix="valid",
         subset=3000, class_in_sum=False)
-    test_metrics, _ = metrics.evaluate_model(
+    test_metrics, _, _ = metrics.evaluate_model(
         sess, model, dataset.test,
         epoch_n, dataset, filename_prefix="test",
         subset=None)
 
+    if epoch_n % 5 == 0:
+        analytic_mean = sess.run(model.gausses["means"])
+        mean_diff = np.sqrt(np.sum(np.square(analytic_mean - valid_mean), axis=1))
+        print("Mean diff:", mean_diff)
 
     if epoch_n % 50 == 0:
         save_path = model.saver.save(
@@ -209,20 +203,20 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
     return train_metrics, valid_metrics, test_metrics
 
 if __name__ == "__main__":
-    latent_dims = [20]
-    distance_weights = [10.0]
-    supervised_weights = [0.1, 0.5, 1.0, 2.0]
+    latent_dims = [10, 20, 100]
+    distance_weights = [0., 1., 10.]
+    supervised_weights = [1.0, 0.5, 2.0]
     # supervised_weights = [1.0, 0.5, 2.0]
-    kernel_nums = [0]
-    batch_sizes = [500, 200]
-    hidden_dims = [100, 300, 500]
+    kernel_nums = [2, 3, 4]
+    batch_sizes = [100]
+    hidden_dims = [300, 500, 1000]
     gammas = [1.0]
-    inits = [0.01]
+    inits = [1.0]
     cc_eps = [0.0]
     # labeled_super_weights = [1.0]
     labeled_super_weights = [0.]
     rng_seeds = [20]
-    erf_weights = [10.]
+    erf_weights = [0.]
     alphas = [1e-3]
 
     for hyperparams in itertools.product(

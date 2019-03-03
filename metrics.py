@@ -121,12 +121,16 @@ def evaluate_model(
     all_z = np.vstack(all_z)
     preds = np.array(preds)
     emp_variances = []
+    emp_means = []
     for label in range(dataset.classes_num):
         labeled_points = all_z[preds == label]
+        emp_means += [np.mean(labeled_points, axis=0)]
         emp_var = np.std(labeled_points, axis=0)
         emp_var = np.nan_to_num(emp_var)
         # print(emp_var, len(emp_var))
         emp_variances += [np.mean(np.square(emp_var))]
+    emp_means = np.array(emp_means)
+    emp_variances = np.array(emp_variances)
 
     rand_score = adjusted_rand_score(preds, valid_set["y"].argmax(-1))
     metrics_final["rand_score"] = rand_score
@@ -158,7 +162,7 @@ def evaluate_model(
     #              filename=graphs_folder + "/tsne_{}_epoch_{}.png".format(filename_prefix, str(epoch).zfill(3)))
 
     for key, value in metrics_final.items():
-        if key is "accuracy" or key is "classification":
+        if key is "accuracy": # or key is "classification":
             metrics_final[key] = np.sum(value) / valid_set["y"].sum()
         else:
             metrics_final[key] = np.mean(value)
@@ -169,7 +173,7 @@ def evaluate_model(
             print("{}: {:.4f}".format(key, metrics_final[key]), end=" ")
         print()
 
-    return metrics_final, emp_variances
+    return metrics_final, emp_variances, emp_means
 
 
 def sample_from_classes(sess, model, dataset, epoch, valid_var=None, show_only=False):
@@ -270,7 +274,7 @@ def interpolation(sess, model, dataset, epoch, show_only=False):
             model.placeholders["X"]: x_sample,
             model.placeholders["y"]: np.zeros((len(x_sample), dataset.classes_num)),
             model.out["simplex_y"]: one_hot_class,
-            model.out["probs"]: y_sample
+            # model.out["probs"]: y_sample
         }
         out_z1 = sess.run(model.out["z"], feed_dict)
         #self.model.encode(x_sample)
@@ -289,7 +293,7 @@ def interpolation(sess, model, dataset, epoch, show_only=False):
         y1 = sess.run(model.out["y"], {
             model.out["z"]: A,
             model.out["simplex_y"]: one_hot_class,
-            model.out["probs"]: B
+            # model.out["probs"]: B
             }
         )
 
@@ -335,7 +339,7 @@ def plot_costs(fig, costs, name):
     ax_2.clear()
     ax_1.set_title(name)
 
-    for key in ["classification", "erf", "gmm", "distance"]:
+    for key in ["classification", "erf", "gmm", "reconstruction"]:
         ax_1.plot(costs[key], label=key)
 
     for key in ["accuracy"]:

@@ -105,6 +105,9 @@ class Dataset:
 
         labels = np.copy(self.train["y"])
         labels_props = self.train["y"].sum(0) / self.train["y"].sum()
+        
+        # TODO: naprawić proporcje
+        labels_props = np.array([0.1] * 10)
 
         if keep_labels_proportions:
             argmax_labels = labels.argmax(-1).squeeze()
@@ -145,6 +148,7 @@ class Dataset:
 
         remain_indices = labels.sum(1).astype(bool)
         removed_indices = np.logical_not(remain_indices)
+        print("Indices", remain_indices, removed_indices)
 
         # Get remain indices per class
         argmaxed_y = self.train["y"].argmax(1)
@@ -168,10 +172,12 @@ class Dataset:
 
         # Kolejnosc
 
-        remain_indices = np.where(remain_indices)
+    
+        remain_indices = np.where(remain_indices)[0]
+        removed_indices = np.where(removed_indices)[0]
         self.rng.shuffle(remain_indices)
-        removed_indices = np.where(removed_indices)
         self.rng.shuffle(removed_indices)
+        print("Indices after shuffle", remain_indices, removed_indices)
 
         self.labeled_train = {"X": self.train["X"][remain_indices],
                               "y": self.train["y"][remain_indices]}
