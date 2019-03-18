@@ -396,6 +396,62 @@ class WideShaoCoder():
             y_mean = h
             return y_mean
 
+class SimpleCnnCoder():
+    def __init__(self, dataset,
+            h_dim=300,
+            kernel_size=4,
+            kernel_num=32):
+
+        self.h_dim = h_dim
+        self.kernel_size = kernel_size
+        self.kernel_num = kernel_num
+        self.image_shape = dataset.image_shape
+
+    def encode(self, x, z_dim, training):
+        im_h, im_w, im_c = self.image_shape
+
+        with tf.variable_scope("encoder", reuse=tf.AUTO_REUSE):
+            h = x
+            h = tf.reshape(h, (-1, im_h, im_w, im_c))
+
+            h = tfl.conv2d(
+                    h, self.kernel_num, self.kernel_size,
+                    strides=1, padding="same", activation=tf.nn.relu)
+            h = tfl.max_pooling2d(h, 2, 2)
+
+            h = tfl.conv2d(
+                    h, self.kernel_num * 2, self.kernel_size,
+                    strides=1, padding="same", activation=tf.nn.relu)
+            h = tfl.max_pooling2d(h, 2, 2)
+
+            h = tfl.flatten(h)
+            h = tfl.dense(h, units=self.h_dim, activation=tf.nn.relu)
+            z_mean = tfl.dense(h, units=z_dim, name='z_mean')
+            return z_mean
+
+    def decode(self, z, x_dim, training):
+        im_h, im_w, im_c = self.image_shape
+
+        with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
+            h = z
+            h = tfl.dense(h, units=self.h_dim, activation=tf.nn.relu)
+            h = tfl.dense(
+                    h, units=im_h // 4 * im_w // 4 * self.kernel_num * 2,
+                    activation=tf.nn.relu)
+            h = tf.reshape(h, (-1, im_h // 4, im_w // 4, self.kernel_num * 2))
+
+            h = tfl.conv2d_transpose(
+                    h, self.kernel_num, self.kernel_size,
+                    strides=2, padding="same", activation=tf.nn.relu)
+
+            h = tfl.conv2d_transpose(
+                    h, im_c, self.kernel_size,
+                    strides=2, padding="same")
+
+            h = tfl.flatten(h)
+            y_mean = h
+            return y_mean
+
 class ShaoCoder():
     def __init__(self, dataset,
             h_dim=256,
@@ -494,18 +550,17 @@ class RectSvhnCoder():
             h = tfl.max_pooling2d(h, 2, 2)
 
             # BLOCK 2
-            h = tfl.conv2d(
-                    h, self.kernel_num * 2, self.kernel_size,
-                    padding="same", activation=tf.nn.relu)
+            # h = tfl.conv2d(
+            #         h, self.kernel_num * 2, self.kernel_size,
+            #         padding="same", activation=tf.nn.relu)
 
-            h = tfl.conv2d(
-                    h, self.kernel_num * 2, self.kernel_size,
-                    padding="same", activation=tf.nn.relu)
+            # h = tfl.conv2d(
+            #         h, self.kernel_num * 2, self.kernel_size,
+            #         padding="same", activation=tf.nn.relu)
 
-            h = tfl.conv2d(
-                    h, self.kernel_num * 2, self.kernel_size,
-                    padding="same", activation=tf.nn.relu)
-            h = tfl.max_pooling2d(h, 2, 2)
+            # h = tfl.conv2d(
+            #         h, self.kernel_num * 2, self.kernel_size,
+            #         padding="same", activation=tf.nn.relu)
 
             # BLOCK 3
             h = tfl.conv2d(
@@ -517,11 +572,12 @@ class RectSvhnCoder():
             h = tfl.conv2d(
                     h, self.kernel_num * 2, 1,
                     padding="same", activation=tf.nn.relu)
-
+            h = tfl.max_pooling2d(h, 2, 2)
 
             h = tfl.flatten(h)
             h = tfl.dense(h, units=self.h_dim, activation=tf.nn.relu)
             z_mean = tfl.dense(h, units=z_dim, name='z_mean')
+            z_mean = tfl.batch_normalization(z_mean, training=training)
             return z_mean
 
     def decode(self, z, x_dim, training):
@@ -538,7 +594,7 @@ class RectSvhnCoder():
             # BLOCK 3
             h = tfl.conv2d_transpose(
                     h, self.kernel_num * 2, 1,
-                    strides=1, padding="same", activation=tf.nn.relu)
+                    strides=2, padding="same", activation=tf.nn.relu)
             h = tfl.conv2d_transpose(
                     h, self.kernel_num * 2, 1,
                     strides=1, padding="same", activation=tf.nn.relu)
@@ -547,15 +603,15 @@ class RectSvhnCoder():
                     strides=1, padding="same", activation=tf.nn.relu)
 
             # BLOCK 2
-            h = tfl.conv2d_transpose(
-                    h, self.kernel_num * 2, self.kernel_size,
-                    strides=2, padding="same", activation=tf.nn.relu)
-            h = tfl.conv2d_transpose(
-                    h, self.kernel_num * 2, self.kernel_size,
-                    strides=1, padding="same", activation=tf.nn.relu)
-            h = tfl.conv2d_transpose(
-                    h, self.kernel_num, self.kernel_size,
-                    strides=1, padding="same", activation=tf.nn.relu)
+            # h = tfl.conv2d_transpose(
+            #         h, self.kernel_num * 2, self.kernel_size,
+            #         strides=2, padding="same", activation=tf.nn.relu)
+            # h = tfl.conv2d_transpose(
+            #         h, self.kernel_num * 2, self.kernel_size,
+            #         strides=1, padding="same", activation=tf.nn.relu)
+            # h = tfl.conv2d_transpose(
+            #         h, self.kernel_num, self.kernel_size,
+            #         strides=1, padding="same", activation=tf.nn.relu)
 
             # BLOCK 3
             h = tfl.conv2d_transpose(
@@ -806,10 +862,11 @@ class CnnCoder():
 
 
 class FCClassifierCoder():
-    def __init__(self, dataset, h_dim=400):
+    def __init__(self, dataset, h_dim=400, layers_num=3):
         self.h_dim = h_dim
         self.image_shape = dataset.image_shape
-        self.hidden_dims = [h_dim, h_dim, h_dim]
+        self.hidden_dims = [h_dim] * layers_num
+        print("hidden dims", self.hidden_dims)
 
     def encode(self, x, y, z_dim, training=False):
         hd = self.hidden_dims[0]
@@ -821,7 +878,7 @@ class FCClassifierCoder():
         z_mean = tfl.dense(h, units=z_dim, name='z_mean')
         return z_mean
 
-    def decode(self, z, y,  x_dim, training=False):
+    def decode(self, z, y, x_dim, training=False):
         h = tf.concat([z, y], 1)
         for hd in reversed(self.hidden_dims):
             h = tfl.dense(h, units=hd, activation=tf.nn.relu)
@@ -833,7 +890,8 @@ class FCCoder():
         self.h_dim = h_dim
         self.image_shape = dataset.image_shape
         self.hidden_dims = [h_dim] * layers_num
-        self.hidden_dims[-1] = self.hidden_dims[-1] // 2
+        self.output_activation_fn = None if dataset.name == "svhn" else None
+        # self.hidden_dims[-1] = self.hidden_dims[-1] // 2
 
     def encode(self, x, z_dim, training=False):
         with tf.variable_scope("encoder", reuse=tf.AUTO_REUSE):
@@ -850,5 +908,15 @@ class FCCoder():
             for hd in reversed(self.hidden_dims):
                 h = tfl.dense(h, units=hd, activation=tf.nn.relu)
                 # h = tfl.batch_normalization(h, training=training)
-            y_mean = tfl.dense(h, units=x_dim, name='y_mean', activation=None)
+            y_mean = tfl.dense(h, units=x_dim, name='y_mean', activation=self.output_activation_fn)
             return y_mean
+
+class DummyClassifier():
+    def __init__(self, *args, **kwargs):
+        raise NotImplemented
+
+    def encode(self, *args, **kwargs):
+        raise NotImplemented
+
+    def decode(self, *args, **kwargs):
+        raise NotImplemented

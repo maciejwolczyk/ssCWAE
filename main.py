@@ -1,5 +1,6 @@
 import numpy as np
 import itertools
+import gc
 import sys
 import os
 import collections
@@ -14,8 +15,6 @@ import baselines
 import cwae
 import data_loader
 import metrics
-
-# TODO: dlaczego scatterploty z FCClassifier wygladaja tak dziwnie?
 
 frugal_config = tf.ConfigProto(gpu_options=tf.GPUOptions(allow_growth=True))
 
@@ -54,6 +53,7 @@ def get_batch(batch_idx, batch_size, dataset):
                            + list(range(0, indices_end)))
     else:
         labeled_indices = list(range(indices_start, indices_end))
+    # print(labeled_indices)
 
     X_labeled = dataset.labeled_train["X"][labeled_indices]
     y_labeled = dataset.labeled_train["y"][labeled_indices]
@@ -75,7 +75,7 @@ def train_model(
 
 
     dataset = data_loader.get_dataset_by_name(dataset_name, rng_seed=rng_seed)
-    dataset.whitening()
+    # dataset.whitening()
     dataset.remove_labels_fraction(
             number_to_keep=labeled_examples_n,
             keep_labels_proportions=True, batch_size=100)
@@ -85,19 +85,19 @@ def train_model(
     #         kernel_size=3,
     #         kernel_num=kernel_num)
 
-    # coder = architecture.WideShaoClassifierCoder(
-    #     dataset, kernel_num=kn, h_dim=h_dim)
-    coder = architecture.FCCoder(
-        dataset, h_dim=h_dim, layers_num=kernel_num)
-    classifier_cls = cwae.CwaeClassifier
+    coder = architecture.RectSvhnCoder(
+        dataset, kernel_num=kn, h_dim=h_dim)
+    # coder = architecture.FCCoder(
+    #     dataset, h_dim=h_dim, layers_num=kernel_num)
+    classifier_cls = architecture.DummyClassifier
 
     model_name = (
-        "{}/{}/{}_fc/{}d_lindist_erfw{}_hl{}_hd{}_bs{}_sw{}_dw{}_a{}_gw{}" +
-        "_simple_rectlayers_lasthalf").format(
+        "{}/{}/{}/{}d_lindist_erfw{}_kn{}_hd{}_bs{}_sw{}_dw{}_a{}_gw{}_init{}" +
+        "lr1e-3_nosig_bn").format(
             dataset.name, coder.__class__.__name__, classifier_cls.__name__,
             latent_dim, erf_weight, kernel_num, h_dim,
             batch_size, supervised_weight, distance_weight, erf_alpha,
-            gamma)
+            gamma, init)
 
     print(model_name)
     prepare_directories(model_name)
@@ -107,7 +107,7 @@ def train_model(
             latent_dim=latent_dim,
             supervised_weight=supervised_weight,
             distance_weight=distance_weight, eps=cc_ep,
-            init=init, gamma=gamma, classifier_cls=classifier_cls,
+            init=init, gamma_weight=gamma, classifier_cls=classifier_cls,
             erf_weight=erf_weight, erf_alpha=erf_alpha,
             labeled_super_weight=labeled_super_weight)
 
@@ -115,15 +115,19 @@ def train_model(
 
 
 def run_training(model, dataset, batch_size):
-    n_epochs = 100
+    n_epochs = 200
     with tf.Session(config=frugal_config) as sess:
         sess.run(tf.global_variables_initializer())
+        
+        # TODO: restore session when using classifier
+        # model.class_saver.restore(sess, "weights/classifier/epoch=100.ckpt")
         costs = []
 
         for epoch_n in trange(n_epochs + 1):
             distance = True
             cost = run_epoch(epoch_n, sess, model, dataset, batch_size, distance)
             costs += [cost]
+            dataset.reshuffle()
 
         costs = np.array(costs)
         train_costs, valid_costs, test_costs = costs[:, 0], costs[:, 1], costs[:, 2]
@@ -137,9 +141,11 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
     batches_num = len(dataset.unlabeled_train["X"]) // batch_size
     # dataset.unlabeled_train if not links
 
+
     for batch_idx in trange(batches_num, leave=False):
         X_batch, y_batch = get_batch(batch_idx, batch_size, dataset)
-        # X_batch = apply_bernoulli_noise(X_batch)
+        if dataset.name == "mnist":
+            X_batch = apply_bernoulli_noise(X_batch)
 
         feed_dict = feed_dict={
             model.placeholders["X"]: X_batch,
@@ -149,22 +155,28 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
         if batch_idx % 300:
             feed_dict[model.placeholders["train_labeled"]] = False
 
-        if epoch_n < 60:
+        if epoch_n < 50:
             feed_dict[model.placeholders["erf_weight"]] = 0
 
-        if epoch_n < 35:
+        if epoch_n < 50:
             feed_dict[model.placeholders["classifier_distance_weight"]] = 0
             feed_dict[model.placeholders["distance_weight"]] = 0
-
+        # elif epoch_n > 150:
+        #     feed_dict[model.placeholders["classifier_distance_weight"]] = -1
+        #     feed_dict[model.placeholders["distance_weight"]] = -1
+            
 
         sess.run(model.train_ops["full"], feed_dict=feed_dict)
 
         # if epoch_n < 50:
-        #     sess.run(model.train_ops["class"], feed_dict=feed_dict)
-        # elif epoch_n < 100:
         #     sess.run(model.train_ops["full_gmm_freeze"], feed_dict=feed_dict)
         # else:
         #     sess.run(model.train_ops["full_gmm"], feed_dict=feed_dict)
+
+        # if epoch_n < 50:
+        #     sess.run(model.train_ops["full_norm_freeze"], feed_dict=feed_dict)
+        # else:
+        #     sess.run(model.train_ops["full_norm"], feed_dict=feed_dict)
 
         # if batch_idx % 50:
         #     print("\n", np.sum(
@@ -175,7 +187,7 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
     train_metrics, _, _ = metrics.evaluate_model(
         sess, model, dataset.semi_labeled_train,
         epoch_n, dataset, filename_prefix="train",
-        subset=3000, training_mode=True)
+        subset=3000, training_mode=False)
     valid_metrics, valid_var, valid_mean = metrics.evaluate_model(
         sess, model, dataset.train,
         epoch_n, dataset, filename_prefix="valid",
@@ -203,21 +215,49 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
     return train_metrics, valid_metrics, test_metrics
 
 if __name__ == "__main__":
-    latent_dims = [10, 20, 100]
-    distance_weights = [0., 1., 10.]
-    supervised_weights = [1.0, 0.5, 2.0]
-    # supervised_weights = [1.0, 0.5, 2.0]
-    kernel_nums = [2, 3, 4]
-    batch_sizes = [100]
-    hidden_dims = [300, 500, 1000]
-    gammas = [1.0]
-    inits = [1.0]
-    cc_eps = [0.0]
-    # labeled_super_weights = [1.0]
-    labeled_super_weights = [0.]
-    rng_seeds = [20]
-    erf_weights = [0.]
-    alphas = [1e-3]
+    
+    dataset_name = "svhn"
+    labeled_num = 1000
+    
+
+
+    # TODO: cw_logits ale bez sigmoida?
+    if dataset_name == "svhn":
+        latent_dims = [10]
+        distance_weights = [0., 1.]
+        supervised_weights = [10.0]
+        kernel_nums = [8, 16, 32]
+        batch_sizes = [100, 200, 500]
+        hidden_dims = [100, 300, 600]
+        gammas = [1.0]
+        
+        # init nie ma wiekszego znaczenia chyba
+        inits = [0.1, 1., 2.]
+        cc_eps = [0.0]
+        # labeled_super_weights = [1.0]
+        labeled_super_weights = [0.]
+        rng_seeds = [20]
+        erf_weights = [0.]
+        alphas = [1e-3]
+
+    elif dataset_name == "mnist":
+        latent_dims = [5]
+        distance_weights = [1., 1e2, 1e3, 1e4]
+        supervised_weights = [1.0]
+        kernel_nums = [4, 5, 6]
+        # dla bs=200 tez spoko dziala
+        batch_sizes = [100]
+        hidden_dims = [100, 300, 500]
+        gammas = [1.0]
+        
+        # init nie ma wiekszego znaczenia chyba
+        inits = [0.1]
+        cc_eps = [0.0]
+        # labeled_super_weights = [1.0]
+        labeled_super_weights = [0.]
+        rng_seeds = [20]
+        erf_weights = [0.]
+        alphas = [1e-3]
 
     for hyperparams in itertools.product(
             latent_dims, kernel_nums, distance_weights,
@@ -225,8 +265,11 @@ if __name__ == "__main__":
             rng_seeds, supervised_weights, inits, gammas,
             erf_weights, alphas):
         ld, kn, dw, hd, bs, ccep, lsw, rs, sw, init, gamma, erf, alpha = hyperparams
-        train_model("mnist", latent_dim=ld, h_dim=hd,
+        train_model(dataset_name, latent_dim=ld, h_dim=hd,
             distance_weight=dw, kernel_num=kn, cc_ep=ccep,
-            batch_size=bs, labeled_examples_n=100, rng_seed=rs,
+            batch_size=bs, labeled_examples_n=labeled_num, rng_seed=rs,
             supervised_weight=sw, init=init, gamma=gamma,
             erf_weight=erf, erf_alpha=alpha, labeled_super_weight=lsw)
+        gc.collect()
+        # h = hpy()
+        # print(h.heap())

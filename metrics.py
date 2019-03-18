@@ -104,7 +104,8 @@ def evaluate_model(
                 [metrics_tensors, model.preds, model.out["z"]],
                 feed_dict=feed_dict)
 
-        # metrics["classification"] *= y_batch.sum()
+
+        metrics["classification"] *= y_batch.sum()
         pred = class_logits.argmax(-1)
         preds += pred.tolist()
 
@@ -162,14 +163,14 @@ def evaluate_model(
     #              filename=graphs_folder + "/tsne_{}_epoch_{}.png".format(filename_prefix, str(epoch).zfill(3)))
 
     for key, value in metrics_final.items():
-        if key is "accuracy": # or key is "classification":
+        if key is "accuracy" or key is "classification":
             metrics_final[key] = np.sum(value) / valid_set["y"].sum()
         else:
             metrics_final[key] = np.mean(value)
 
     if epoch % 5 == 0:
         print(epoch, "Dataset:", filename_prefix, end="\t")
-        for key in ["accuracy", "gmm", "norm", "erf", "reconstruction", "distance", "classification"]:
+        for key in ["accuracy", "cramer-wold", "reconstruction", "distance", "classification"]:
             print("{}: {:.4f}".format(key, metrics_final[key]), end=" ")
         print()
 
@@ -252,30 +253,32 @@ def interpolation(sess, model, dataset, epoch, show_only=False):
     out_z=[[1,2],[3,4],[5,6],[7,8],[9,10],[11,12],[13,14],[15,16],[15,17],[18,1]]
     # TODO: przejrzyj to
 
-    nx = 10
+    n_iterations = 10
+    nx = n_iterations + 2
     ny = 10
-    n_iterations = nx
-
-    x_values = np.linspace(-2, 2, nx)
-    y_values = np.linspace(-2, 2, ny)
 
     im_h, im_w, im_c = dataset.image_shape
     # im_w = 28
     # im_h = 28
     # im_c = 1 # channels
 
-    canvas = np.empty((im_h * ny, im_w * nx, im_c))
-    for i, yi in enumerate(y_values):
-        x_sample = dataset.test["X"][out_z[i]]
-        y_sample = dataset.test["y"][out_z[i]]
+    canvas = np.empty((im_h * ny, im_w * (nx), im_c))
 
-        one_hot_class = [0.1] * 10
+    for y_idx in range(ny):
+        x_sample = dataset.test["X"][out_z[y_idx]]
+        y_sample = dataset.test["y"][out_z[y_idx]]
+
+        one_hot_class = [0.] * 10
+        one_hot_class[0] = 1.
+
+
         feed_dict = {
             model.placeholders["X"]: x_sample,
             model.placeholders["y"]: np.zeros((len(x_sample), dataset.classes_num)),
             model.out["simplex_y"]: one_hot_class,
-            # model.out["probs"]: y_sample
+            # model.out["probs"]: [one_hot_class] * len(x_sample)
         }
+        # TODO: brudny hack
         out_z1 = sess.run(model.out["z"], feed_dict)
         #self.model.encode(x_sample)
         codings_rnd = out_z1[0]
@@ -283,12 +286,11 @@ def interpolation(sess, model, dataset, epoch, show_only=False):
 
         A = np.array(codings_rnd)
         B = np.array(y_sample[0])
-        for iteration in np.arange(1,n_iterations):
+        for iteration in np.arange(1, n_iterations):
             codings_interpolate = codings_rnd + (target_codings - codings_rnd) * iteration / n_iterations
             y_interpolate = y_sample[0] + (y_sample[1] - y_sample[0]) * iteration / n_iterations
             B = np.vstack([B, y_interpolate])
             A = np.vstack([A, codings_interpolate])
-
 
         y1 = sess.run(model.out["y"], {
             model.out["z"]: A,
@@ -297,18 +299,18 @@ def interpolation(sess, model, dataset, epoch, show_only=False):
             }
         )
 
-        for j, xi in enumerate(x_values):
-            d_plot = y1[j]
-            # d_plot /= 255
-            # d_plot = 1 - d_plot
-            # d_plot *= 255
+        y1 = np.concatenate(
+            (x_sample[0].reshape(1, -1), y1, x_sample[1].reshape(1, -1)), axis=0)
+        for x_idx, d_plot in enumerate(y1):
             if dataset.whitened:
                 d_plot = dataset.blackening(d_plot)
 
             # d_plot = 1 / (1 + np.exp(-d_plot))
             d_plot[d_plot<0] = 0
             d_plot[d_plot>1] = 1
-            canvas[(ny-i-1)* im_h:(ny-i) * im_h, j * im_w:(j+1)* im_w] = d_plot.reshape(im_h, im_w, im_c)
+            
+            canvas[(ny - y_idx - 1) * im_h:(ny - y_idx) * im_h,
+                   x_idx * im_w:(x_idx + 1) * im_w] = d_plot.reshape(im_h, im_w, im_c)
 
     canvas = canvas.squeeze() # (28, 28, 1) => (28, 28)
     plt.figure(figsize=(nx, ny))

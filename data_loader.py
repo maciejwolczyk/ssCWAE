@@ -31,10 +31,10 @@ class Dataset:
         self.train_examples_num = len(train_X)
         self.test_examples_num = len(test_X)
 
-        self.image_shape = train_X.shape[1:]  # Ignore num of examples
+        self.image_shape = list(train_X.shape[1:])  # Ignore num of examples
 
         if len(self.image_shape) == 2:
-            self.image_shape = self.image_shape + (1,)
+            self.image_shape = self.image_shape + [1,]
 
         self.train = {"X": train_X.reshape(self.train_examples_num, -1),
                       "y": one_hot_vectorize(train_y, self.classes_num)}
@@ -48,26 +48,39 @@ class Dataset:
         self.x_dim = im_h * im_w * im_c
 
     def whitening(self):
-        self.whitened = True
-        self.mean = self.train["X"].mean(axis=0)
-        # self.std = 1
-        std = self.train["X"].std(axis=0)
-        self.filtered = np.where(std > 0.1)
-        self.train["X"] = self.train["X"][:, std > 0.1]
-        self.test["X"] = self.test["X"][:, std > 0.1]
-        self.x_dim = len(self.train["X"][0])
-        print("X DIM", self.x_dim)
+        if self.name == "mnist":
+            self.whitened = True
+            self.mean = self.train["X"].mean(axis=0)
+            # self.std = 1
+            std = self.train["X"].std(axis=0)
+            self.filtered = np.where(std > 0.1)
+            self.train["X"] = self.train["X"][:, std > 0.1]
+            self.test["X"] = self.test["X"][:, std > 0.1]
+            self.x_dim = len(self.train["X"][0])
+            print("X DIM", self.x_dim)
 
-        # self.train["X"] = (self.train["X"] - self.mean)
-        # self.test["X"] = (self.test["X"] - self.mean)
-        # pca = PCA(n_components=self.x_dim, whiten=False)
-        # pca.fit(self.train["X"])
-        # self.train["X"] = pca.transform(self.train["X"])
-        # self.test["X"] = pca.transform(self.test["X"])
+        elif self.name == "svhn":
+            reshaped_train = self.train["X"].reshape([-1] + self.image_shape)
+            reshaped_test = self.test["X"].reshape([-1] + self.image_shape)
+
+            print(reshaped_train.shape)
+            self.std = reshaped_train.std(axis=(0, 1, 2))
+            print("STD", self.std)
+            reshaped_train /= self.std
+            reshaped_test /= self.std
+
+            self.train["X"] = reshaped_train.reshape(self.train["X"].shape)
+            self.test["X"] = reshaped_test.reshape(self.test["X"].shape)
 
     def blackening(self, X):
-        output = self.mean
-        output[self.filtered] = X
+        if self.name == "mnist":
+            output = self.mean
+            output[self.filtered] = X
+        elif self.name == "svhn":
+            reshaped_X = X.reshape([-1] + self.image_shape)
+            reshaped_X *= self.std
+            output = reshaped_X.reshape(X.shape)
+
         return output
 
     def load_links(self, pairs_num):
@@ -107,7 +120,7 @@ class Dataset:
         labels_props = self.train["y"].sum(0) / self.train["y"].sum()
         
         # TODO: naprawić proporcje
-        labels_props = np.array([0.1] * 10)
+        # labels_props = np.array([0.1] * 10)
 
         if keep_labels_proportions:
             argmax_labels = labels.argmax(-1).squeeze()
@@ -171,8 +184,6 @@ class Dataset:
         print(self.train["y"][remain_indices].argmax(1))
 
         # Kolejnosc
-
-    
         remain_indices = np.where(remain_indices)[0]
         removed_indices = np.where(removed_indices)[0]
         self.rng.shuffle(remain_indices)
@@ -197,6 +208,9 @@ class Dataset:
 
         self.semi_labeled_train = {"X": semi_labeled_X,
                                    "y": semi_labeled_y}
+
+    def reshuffle(self):
+        np.random.shuffle(self.unlabeled_train["X"])
 
 
 
