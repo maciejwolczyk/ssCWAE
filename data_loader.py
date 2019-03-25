@@ -41,6 +41,10 @@ class Dataset:
 
         self.test = {"X": test_X.reshape(self.test_examples_num, -1),
                       "y": one_hot_vectorize(test_y, self.classes_num)}
+        
+        self.valid = {"X": self.train["X"][-5000:],
+                      "y": self.train["y"][-5000:]}
+
 
         print(self.train["y"].sum(0))
         self.whitened = False
@@ -211,8 +215,9 @@ class Dataset:
 
     def reshuffle(self):
         np.random.shuffle(self.unlabeled_train["X"])
-
-
+        indices = np.random.permutation(len(self.labeled_train["X"]))
+        self.labeled_train["X"] = self.labeled_train["X"][indices]
+        self.labeled_train["y"] = self.labeled_train["y"][indices]
 
 def get_mnist():
     mnist_train, mnist_test = tf.keras.datasets.mnist.load_data()
@@ -235,9 +240,18 @@ def get_fashion_mnist():
     labels = ["tshirt", "trousers", "pullover", "dress", "coat", "sandal", "shirt", "sneaker", "bag", "ankle\nboot"]
     return fmnist_train, fmnist_test, labels, "fashion_mnist"
 
-def get_svhn(): # / 255?
+def get_svhn(extra=True): # / 255?
     dataset_train = sio.loadmat("dataset/svhn/train_32x32.mat")
     dataset_train = dataset_train["X"].transpose(3, 0, 1, 2), dataset_train["y"] - 1
+
+    if extra:
+        dataset_extra = sio.loadmat("dataset/svhn/extra_32x32.mat")
+        dataset_extra = dataset_extra["X"].transpose(3, 0, 1, 2), dataset_extra["y"] - 1
+        dataset_train = (
+            np.concatenate([dataset_train[0], dataset_extra[0]], axis=0), 
+            np.concatenate([dataset_train[1], dataset_extra[1]], axis=0)
+        )
+
     dataset_test = sio.loadmat("dataset/svhn/test_32x32.mat")
     dataset_test = dataset_test["X"].transpose(3, 0, 1, 2), dataset_test["y"] - 1
     labels = list(str(i) for i in range(1, 10)) + [0]
@@ -253,21 +267,10 @@ def get_norb(): # Doesn't work
     print(train_X.shape, train_y.shape, test_X.shape, test_y.shape)
 
 def get_cifar():
-    fmnist_train, fmnist_test = tf.keras.datasets.cifar10.load_data()
-
-    onehot_labels = np.zeros((fmnist_train[1].shape[0], 10))
-    for idx, y in enumerate(fmnist_train[1]):
-        onehot_labels[idx, y] = 1
-    fmnist_train = np.reshape(fmnist_train[0] / 255, (-1, 32*32*3)), onehot_labels
-
-    onehot_labels = np.zeros((fmnist_test[1].shape[0], 10))
-    for idx, y in enumerate(fmnist_test[1]):
-        onehot_labels[idx, y] = 1
-
-    fmnist_test = np.reshape(fmnist_test[0] / 255, (-1, 32*32*3)), onehot_labels
+    cifar_train, cifar_test = tf.keras.datasets.cifar10.load_data()
     labels = ["airplane", "automobile", "bird", "cat",
           "deer", "dog", "frog", "horse", "ship", "truck"]
-    return fmnist_train, fmnist_test, labels, "fashion_mnist"
+    return cifar_train, cifar_test, labels, "cifar"
 
 def get_celeba_images(examples_num):
     X = []

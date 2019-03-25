@@ -186,15 +186,15 @@ class CwaeModel():
         self, name, coder, dataset, latent_dim=300,
         supervised_weight=1.0, distance_weight=1.0,
         erf_weight=1.0, erf_alpha=0.05,
-        optimizer=tft.AdamOptimizer(1e-3),
+        learning_rate=1e-3,
         classifier_cls=EntropyClassifier, classifier_distance_weight=1.0,
         eps=1e-2, init=1.0, gamma_weight=1.0, labeled_super_weight=2.0):
-
         tf.reset_default_graph()
         self.name = name
         self.init = init
         self.gamma_weight = gamma_weight
         self.coder = coder
+        optimizer = tft.AdamOptimizer(learning_rate)
         self.optimizer = optimizer
         self.classifier_cls = classifier_cls
 
@@ -305,13 +305,13 @@ class CwaeModel():
             )
         )
 
-        # TODO: popraw sum na mean po wywaleniu norma
         rec_cost = tf.cond(
             train_labeled,
             lambda: tf.reduce_mean(rec_cost),
             lambda: tf.reduce_mean(
                 tf.boolean_mask(rec_cost, tf.logical_not(labeled_mask)))
         )
+        rec_cost /= 100
 
         cec_cost = self.ceclike_class_cost(
             tensor_z, tensor_labels, labeled_mask,
@@ -397,7 +397,11 @@ class CwaeModel():
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         with tf.control_dependencies(update_ops):
             # Prepare various train ops
-            train_op = optimizer.minimize(full_cost)
+            gvs = optimizer.compute_gradients(full_cost)
+            capped_gvs = [(tf.clip_by_value(grad, -1., 1.), var) for grad, var in gvs]
+            train_op = optimizer.apply_gradients(capped_gvs)
+
+            # train_op = optimizer.minimize(full_cost)
             freeze_train_op = optimizer.minimize(full_cost, var_list=freeze_vars)
             # means_train_op = optimizer.minimize(class_cost, var_list=means_vars)
 
@@ -847,12 +851,25 @@ def get_gaussians(z_dim, init, dataset):
     with tf.variable_scope("gmm", reuse=False):
         np.random.seed(25)
         print(init, G, z_dim)
-        means_initialization = tf.constant_initializer(
-            np.random.normal(0, init, size=(G, z_dim)))
+        # means_initialization = tf.constant_initializer(
+        #     np.random.normal(0, init, size=(G, z_dim)))
         np.random.seed()
-        means = tf.get_variable(
-                "gmm_means", [G, z_dim],
-                initializer=means_initialization)
+
+
+        one_hot = np.zeros([G, z_dim])
+        one_hot[np.arange(G), np.arange(G)] = 1 
+        one_hot *= 10
+        # TODO: means = tf.constant()
+
+
+        variable_means = False
+        if variable_means:
+            means_initialization = tf.constant_initializer(one_hot)
+            means = tf.get_variable(
+                    "gmm_means", [G, z_dim],
+                    initializer=means_initialization)
+        else:
+            means = tf.constant(one_hot, dtype=tf.float32)
                 # initializer=tf.random_uniform_initializer(-1.0, 1.0))
 
         # var_initialization = tf.constant_initializer(

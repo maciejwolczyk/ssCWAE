@@ -88,7 +88,7 @@ class RectangleCoder():
 class CifarCoder():
     def __init__(self, dataset,
             h_dim=256,
-            kernel_size=4,
+            kernel_size=2,
             kernel_num=32):
 
         self.h_dim = h_dim
@@ -96,67 +96,70 @@ class CifarCoder():
         self.kernel_num = kernel_num
         self.image_shape = dataset.image_shape
 
-    def encode(self, x, z_dim):
+    def encode(self, x, z_dim, training=False):
         im_h, im_w, im_c = self.image_shape
 
         with tf.variable_scope("encoder", reuse=tf.AUTO_REUSE):
             h = x
             h = tf.reshape(h, (-1, im_h, im_w, im_c))
             h = tfl.conv2d(
-                    h, self.kernel_num * 4, self.kernel_size,
+                    h, self.kernel_num, self.kernel_size,
                     strides=1, padding="same")
-            h = tfl.max_pooling2d(h, 2, 2)
             h = tf.nn.relu(h)
 
             h = tfl.conv2d(
-                    h, self.kernel_num * 2, self.kernel_size,
-                    strides=1, padding="same")
-            h = tfl.max_pooling2d(h, 2, 2)
+                    h, self.kernel_num, self.kernel_size,
+                    strides=2, padding="same")
             h = tf.nn.relu(h)
 
             h = tfl.conv2d(
-                    h, self.kernel_num, self.kernel_size - 1,
+                    h, self.kernel_num, self.kernel_size,
                     strides=1, padding="same")
-            h = tfl.max_pooling2d(h, 2, 2)
+            h = tf.nn.relu(h)
+
+            h = tfl.conv2d(
+                    h, self.kernel_num, self.kernel_size,
+                    strides=1, padding="same")
             h = tf.nn.relu(h)
 
             h = tfl.flatten(h)
             h = tfl.dense(h, units=self.h_dim, activation=tf.nn.relu)
             # h = tfl.dense(h, units=self.h_dim, activation=tf.nn.relu)
             z_mean = tfl.dense(h, units=z_dim, name='z_mean')
+            # z_mean = tfl.batch_normalization(z_mean, training=training)
             return z_mean
 
-    def decode(self, z, x_dim):
+    def decode(self, z, x_dim, training=False):
         im_h, im_w, im_c = self.image_shape
 
         with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
             h = z
             h = tfl.dense(h, units=self.h_dim, activation=tf.nn.relu)
             # h = tfl.dense(h, units=self.h_dim, activation=tf.nn.relu)
-            stride = 8
+            stride = 2
             h = tfl.dense(
                     h, units=im_h // stride * im_w // stride * self.kernel_num,
                     activation=tf.nn.relu)
             h = tf.reshape(h, (-1, im_h // stride, im_w // stride, self.kernel_num))
 
             h = tfl.conv2d_transpose(
-                    h, self.kernel_num, self.kernel_size - 1,
-                    strides=2, padding="same", activation=tf.nn.relu)
+                    h, self.kernel_num, self.kernel_size,
+                    strides=1, padding="same", activation=tf.nn.relu)
             h = tf.nn.relu(h)
 
             h = tfl.conv2d_transpose(
-                    h, self.kernel_num * 2, self.kernel_size,
-                    strides=2, padding="same", activation=tf.nn.relu)
+                    h, self.kernel_num, self.kernel_size,
+                    strides=1, padding="same", activation=tf.nn.relu)
             h = tf.nn.relu(h)
 
             h = tfl.conv2d_transpose(
-                    h, self.kernel_num * 4, self.kernel_size,
-                    strides=2, padding="same")
+                    h, self.kernel_num, self.kernel_size,
+                    strides=2, padding="same", activation=tf.nn.relu)
             h = tf.nn.relu(h)
 
             h = tfl.conv2d_transpose(
                     h, im_c, self.kernel_size,
-                    strides=1, padding="same")
+                    strides=1, padding="same", activation=tf.nn.sigmoid)
 
             h = tfl.flatten(h)
             y_mean = h
@@ -622,7 +625,7 @@ class RectSvhnCoder():
                     strides=1, padding="same", activation=tf.nn.relu)
             h = tfl.conv2d_transpose(
                     h, im_c, self.kernel_size,
-                    strides=1, padding="same", activation=None)
+                    strides=1, padding="same", activation=tf.nn.sigmoid)
 
             h = tfl.flatten(h)
             y_mean = h

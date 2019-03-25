@@ -5,6 +5,7 @@ plt.switch_backend("agg")
 from sklearn.metrics import adjusted_rand_score
 from sklearn.manifold import TSNE
 from sklearn.decomposition import PCA
+from tqdm import trange
 
 def draw_gmm(
         z, y, dataset, means=None, alpha=None, p=None,
@@ -227,9 +228,9 @@ def sample_from_classes(sess, model, dataset, epoch, valid_var=None, show_only=F
             canvas[row_idx * im_h:(row_idx + 1) * im_h,
                    col_idx * im_w:(col_idx + 1) * im_w] = sample
 
-        plt.ylabel(
-                dataset.labels_names[row_idx], fontsize=15, rotation=0.45)
-        plt.yticks([])
+    plt.ylabel(
+            "\n".join(dataset.labels_names), fontsize=5, rotation=0.45)
+    plt.yticks([])
 
     # fig.tight_layout(pad=0)
     plt.imshow(canvas.squeeze(), cmap="gray")
@@ -244,6 +245,36 @@ def sample_from_classes(sess, model, dataset, epoch, valid_var=None, show_only=F
                     model.name, str(epoch).zfill(3))
         plt.savefig(filename, bbox_inches='tight', pad_inches=0)
         plt.close()
+
+
+def save_samples(sess, model, dataset, n_samples):
+    means_val, covs_val = sess.run(
+            [model.gausses["means"], model.gausses["variations"]])
+    im_h, im_w, im_c = dataset.image_shape
+
+    samples_per_class = np.random.multinomial(
+        10000, [1/dataset.classes_num] * dataset.classes_num)
+    print(samples_per_class)
+
+    for class_idx in trange(dataset.classes_num):
+        mean = means_val[class_idx]
+        cov = covs_val[class_idx]
+
+        samples = np.random.multivariate_normal(
+            mean, cov * np.eye(len(mean)), size=samples_per_class[class_idx])
+        generated = sess.run(model.out["y"], {model.out["z"]: samples})
+
+        if dataset.whitened:
+            generated = dataset.blackening(generated)
+        generated[generated < 0] = 0
+        generated[generated > 1] = 1
+
+        for idx, image in enumerate(generated):
+            plt.imshow(image.reshape(dataset.image_shape))
+            plt.savefig("results/{}/final_c{}_{}".format(
+                model.name, class_idx, str(idx).zfill(5)))
+            
+
 
 def inter_class_interpolation(sess, model, dataset, epoch, show_only=False):
     pass

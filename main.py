@@ -35,6 +35,9 @@ def prepare_directories(model_name):
 def apply_bernoulli_noise(x):
      return np.random.binomial(1, p=x, size=x.shape)
 
+def apply_uniform_noise(x):
+     return x + np.random.uniform(0, 1, size=x.shape)
+
 def get_batch(batch_idx, batch_size, dataset):
     unlabeled_batch = dataset.unlabeled_train["X"][batch_idx * batch_size:(batch_idx + 1) * batch_size]
 
@@ -71,7 +74,8 @@ def train_model(
         dataset_name, latent_dim=300, batch_size=100,
         labeled_examples_n=100, h_dim=400, kernel_size=4,
         kernel_num=25, distance_weight=1.0, cc_ep=0.0, supervised_weight = 1.0,
-        rng_seed=11, init=1.0, gamma=1.0, erf_weight=1.0, erf_alpha=0.05, labeled_super_weight=2.0):
+        rng_seed=11, init=1.0, gamma=1.0, erf_weight=1.0,
+        erf_alpha=0.05, labeled_super_weight=2.0, learning_rate=1e-3):
 
 
     dataset = data_loader.get_dataset_by_name(dataset_name, rng_seed=rng_seed)
@@ -85,7 +89,7 @@ def train_model(
     #         kernel_size=3,
     #         kernel_num=kernel_num)
 
-    coder = architecture.RectSvhnCoder(
+    coder = architecture.CifarCoder(
         dataset, kernel_num=kn, h_dim=h_dim)
     # coder = architecture.FCCoder(
     #     dataset, h_dim=h_dim, layers_num=kernel_num)
@@ -93,11 +97,11 @@ def train_model(
 
     model_name = (
         "{}/{}/{}/{}d_lindist_erfw{}_kn{}_hd{}_bs{}_sw{}_dw{}_a{}_gw{}_init{}" +
-        "lr1e-3_nosig_bn").format(
+        "lr{}_realsig_nobn_clipping_recdiv100_onehotinit_samplingtest").format(
             dataset.name, coder.__class__.__name__, classifier_cls.__name__,
             latent_dim, erf_weight, kernel_num, h_dim,
             batch_size, supervised_weight, distance_weight, erf_alpha,
-            gamma, init)
+            gamma, init, lr)
 
     print(model_name)
     prepare_directories(model_name)
@@ -109,13 +113,13 @@ def train_model(
             distance_weight=distance_weight, eps=cc_ep,
             init=init, gamma_weight=gamma, classifier_cls=classifier_cls,
             erf_weight=erf_weight, erf_alpha=erf_alpha,
-            labeled_super_weight=labeled_super_weight)
+            labeled_super_weight=labeled_super_weight, learning_rate=lr)
 
     run_training(model, dataset, batch_size)
 
 
 def run_training(model, dataset, batch_size):
-    n_epochs = 200
+    n_epochs = 150
     with tf.Session(config=frugal_config) as sess:
         sess.run(tf.global_variables_initializer())
         
@@ -132,6 +136,7 @@ def run_training(model, dataset, batch_size):
         costs = np.array(costs)
         train_costs, valid_costs, test_costs = costs[:, 0], costs[:, 1], costs[:, 2]
 
+        metrics.save_samples(sess, model, dataset, 10000)
         metrics.save_costs(model, train_costs, "train")
         metrics.save_costs(model, valid_costs, "valid")
         metrics.save_costs(model, test_costs, "test")
@@ -146,6 +151,8 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
         X_batch, y_batch = get_batch(batch_idx, batch_size, dataset)
         if dataset.name == "mnist":
             X_batch = apply_bernoulli_noise(X_batch)
+        elif dataset.name == "svhn" and False:
+            X_batch = apply_uniform_noise(X_batch)
 
         feed_dict = feed_dict={
             model.placeholders["X"]: X_batch,
@@ -189,7 +196,7 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
         epoch_n, dataset, filename_prefix="train",
         subset=3000, training_mode=False)
     valid_metrics, valid_var, valid_mean = metrics.evaluate_model(
-        sess, model, dataset.train,
+        sess, model, dataset.valid,
         epoch_n, dataset, filename_prefix="valid",
         subset=3000, class_in_sum=False)
     test_metrics, _, _ = metrics.evaluate_model(
@@ -197,17 +204,16 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
         epoch_n, dataset, filename_prefix="test",
         subset=None)
 
-    if epoch_n % 5 == 0:
-        analytic_mean = sess.run(model.gausses["means"])
-        mean_diff = np.sqrt(np.sum(np.square(analytic_mean - valid_mean), axis=1))
-        print("Mean diff:", mean_diff)
-
     if epoch_n % 50 == 0:
         save_path = model.saver.save(
                 sess, "weights/dataset_mnist_wae/epoch=%d.ckpt" % (epoch_n))
         print("Model saved in path: {}".format(save_path))
 
-    if epoch_n % 10 == 0:
+    if epoch_n % 5 == 0:
+        analytic_mean = sess.run(model.gausses["means"])
+        mean_diff = np.sqrt(np.sum(np.square(analytic_mean - valid_mean), axis=1))
+        print("Mean diff:", mean_diff)
+
         metrics.interpolation(sess, model, dataset, epoch_n)
         metrics.sample_from_classes(sess, model, dataset, epoch_n, valid_var)
         metrics.sample_from_classes(sess, model, dataset, epoch_n, valid_var=None)
@@ -216,23 +222,28 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
 
 if __name__ == "__main__":
     
-    dataset_name = "svhn"
-    labeled_num = 1000
+    dataset_name = "cifar"
+
+    if dataset_name == "mnist":
+        labeled_num = 100
+    elif dataset_name == "svhn":
+        labeled_num = 1000
+    elif dataset_name == "cifar":
+        labeled_num = 4000
     
-
-
-    # TODO: cw_logits ale bez sigmoida?
-    if dataset_name == "svhn":
-        latent_dims = [10]
-        distance_weights = [0., 1.]
-        supervised_weights = [10.0]
-        kernel_nums = [8, 16, 32]
-        batch_sizes = [100, 200, 500]
-        hidden_dims = [100, 300, 600]
-        gammas = [1.0]
+    # TODO: gradient clipping rzeczywiście?
+    if dataset_name == "svhn" or dataset_name == "cifar":
+        latent_dims = [128, 64]
+        learning_rates = [5e-4]
+        distance_weights = [0.]
+        supervised_weights = [10., 100.]
+        kernel_nums = [64]
+        batch_sizes = [100]
+        hidden_dims = [256]
+        gammas = [1.]
         
         # init nie ma wiekszego znaczenia chyba
-        inits = [0.1, 1., 2.]
+        inits = [1.]
         cc_eps = [0.0]
         # labeled_super_weights = [1.0]
         labeled_super_weights = [0.]
@@ -263,13 +274,13 @@ if __name__ == "__main__":
             latent_dims, kernel_nums, distance_weights,
             hidden_dims, batch_sizes, cc_eps, labeled_super_weights,
             rng_seeds, supervised_weights, inits, gammas,
-            erf_weights, alphas):
-        ld, kn, dw, hd, bs, ccep, lsw, rs, sw, init, gamma, erf, alpha = hyperparams
+            erf_weights, alphas, learning_rates):
+        ld, kn, dw, hd, bs, ccep, lsw, rs, sw, init, gamma, erf, alpha, lr = hyperparams
         train_model(dataset_name, latent_dim=ld, h_dim=hd,
             distance_weight=dw, kernel_num=kn, cc_ep=ccep,
             batch_size=bs, labeled_examples_n=labeled_num, rng_seed=rs,
             supervised_weight=sw, init=init, gamma=gamma,
-            erf_weight=erf, erf_alpha=alpha, labeled_super_weight=lsw)
+            erf_weight=erf, erf_alpha=alpha, labeled_super_weight=lsw, learning_rate=lr)
         gc.collect()
         # h = hpy()
         # print(h.heap())
