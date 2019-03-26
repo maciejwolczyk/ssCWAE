@@ -6,6 +6,7 @@ from sklearn.metrics import adjusted_rand_score
 from sklearn.manifold import TSNE
 from sklearn.decomposition import PCA
 from tqdm import trange
+from PIL import Image
 
 def draw_gmm(
         z, y, dataset, means=None, alpha=None, p=None,
@@ -268,12 +269,13 @@ def save_samples(sess, model, dataset, n_samples):
             generated = dataset.blackening(generated)
         generated[generated < 0] = 0
         generated[generated > 1] = 1
+        generated = (generated * 255).astype("uint8").reshape([-1] + dataset.image_shape)
 
-        for idx, image in enumerate(generated):
-            plt.imshow(image.reshape(dataset.image_shape))
-            plt.savefig("results/{}/final_c{}_{}".format(
-                model.name, class_idx, str(idx).zfill(5)))
-            
+        for idx, pixels in enumerate(generated):
+            filename = "results/{}/final_samples/c{}_{}.png".format(
+                model.name, class_idx, str(idx).zfill(5))
+            img = Image.fromarray(pixels, "RGB")
+            img.save(filename)
 
 
 def inter_class_interpolation(sess, model, dataset, epoch, show_only=False):

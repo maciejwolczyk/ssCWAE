@@ -181,6 +181,7 @@ class CwaeClassifier:
         return full_cost
 
 
+
 class CwaeModel():
     def __init__(
         self, name, coder, dataset, latent_dim=300,
@@ -295,6 +296,7 @@ class CwaeModel():
                 unsupervised_tensor_z, means, variances, probs, gamma)
         # cw_cost = tf.Print(cw_cost, [cw_cost])
         log_cw_cost = tf.log(cw_cost)
+        log_cw_cost *= 1
 
         rec_cost = norm_squared(tensor_x - tensor_y, axis=-1)
         log_rec_cost = tf.cond(
@@ -311,7 +313,7 @@ class CwaeModel():
             lambda: tf.reduce_mean(
                 tf.boolean_mask(rec_cost, tf.logical_not(labeled_mask)))
         )
-        rec_cost /= 100
+        # rec_cost /= 100
 
         cec_cost = self.ceclike_class_cost(
             tensor_z, tensor_labels, labeled_mask,
@@ -851,20 +853,20 @@ def get_gaussians(z_dim, init, dataset):
     with tf.variable_scope("gmm", reuse=False):
         np.random.seed(25)
         print(init, G, z_dim)
-        # means_initialization = tf.constant_initializer(
-        #     np.random.normal(0, init, size=(G, z_dim)))
         np.random.seed()
 
 
         one_hot = np.zeros([G, z_dim])
         one_hot[np.arange(G), np.arange(G)] = 1 
-        one_hot *= 10
+        one_hot *= init
         # TODO: means = tf.constant()
 
 
-        variable_means = False
+        variable_means = True
         if variable_means:
-            means_initialization = tf.constant_initializer(one_hot)
+            means_initialization = tf.constant_initializer(
+                np.random.normal(0, init, size=(G, z_dim)))
+            # means_initialization = tf.constant_initializer(one_hot)
             means = tf.get_variable(
                     "gmm_means", [G, z_dim],
                     initializer=means_initialization)

@@ -15,6 +15,7 @@ import baselines
 import cwae
 import data_loader
 import metrics
+import vae
 
 frugal_config = tf.ConfigProto(gpu_options=tf.GPUOptions(allow_growth=True))
 
@@ -31,6 +32,9 @@ def prepare_directories(model_name):
     if os.path.isdir(graphs_dir):
         rmtree(graphs_dir)
     os.makedirs(graphs_dir)
+
+    samples_dir = "results/{}/final_samples".format(model_name)
+    os.makedirs(samples_dir)
 
 def apply_bernoulli_noise(x):
      return np.random.binomial(1, p=x, size=x.shape)
@@ -95,10 +99,12 @@ def train_model(
     #     dataset, h_dim=h_dim, layers_num=kernel_num)
     classifier_cls = architecture.DummyClassifier
 
+
+    model_type = "cwae"
     model_name = (
-        "{}/{}/{}/{}d_lindist_erfw{}_kn{}_hd{}_bs{}_sw{}_dw{}_a{}_gw{}_init{}" +
-        "lr{}_realsig_nobn_clipping_recdiv100_onehotinit_samplingtest").format(
-            dataset.name, coder.__class__.__name__, classifier_cls.__name__,
+        "{}/{}/{}/{}d_erfw{}_kn{}_hd{}_bs{}_sw{}_dw{}_a{}_gw{}_init{}" +
+        "lr{}_realsig_nobn_clipping_recd_norminit_samplingtest_noalpha_logcw1").format(
+            dataset.name, coder.__class__.__name__, model_type,
             latent_dim, erf_weight, kernel_num, h_dim,
             batch_size, supervised_weight, distance_weight, erf_alpha,
             gamma, init, lr)
@@ -106,20 +112,26 @@ def train_model(
     print(model_name)
     prepare_directories(model_name)
 
-    model = cwae.CwaeModel(
-            model_name, coder, dataset,
-            latent_dim=latent_dim,
-            supervised_weight=supervised_weight,
-            distance_weight=distance_weight, eps=cc_ep,
-            init=init, gamma_weight=gamma, classifier_cls=classifier_cls,
-            erf_weight=erf_weight, erf_alpha=erf_alpha,
-            labeled_super_weight=labeled_super_weight, learning_rate=lr)
+    # supervised_weight *= 0.1 * dataset.train_examples_num / labeled_examples_n
+    if model_type == "cwae":
+        model = cwae.CwaeModel(
+                model_name, coder, dataset,
+                latent_dim=latent_dim,
+                supervised_weight=supervised_weight,
+                distance_weight=distance_weight, eps=cc_ep,
+                init=init, gamma_weight=gamma, classifier_cls=classifier_cls,
+                erf_weight=erf_weight, erf_alpha=erf_alpha,
+                labeled_super_weight=labeled_super_weight, learning_rate=lr)
+    elif model_type == "vae":
+        model = vae.VAEModel(model_name, dataset, coder, latent_dim=latent_dim, lr=lr, beta=1.0)
+    else:
+        raise NotImplemented
 
     run_training(model, dataset, batch_size)
 
 
 def run_training(model, dataset, batch_size):
-    n_epochs = 150
+    n_epochs = 200
     with tf.Session(config=frugal_config) as sess:
         sess.run(tf.global_variables_initializer())
         
@@ -190,7 +202,6 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
         #         (np.expand_dims(means, 0) - np.expand_dims(means, 1)) ** 2, axis=-1)[0], dist, "\n")
 
 
-    # TODO: przez training mode zawsze mamy accuracy 1.0
     train_metrics, _, _ = metrics.evaluate_model(
         sess, model, dataset.semi_labeled_train,
         epoch_n, dataset, filename_prefix="train",
@@ -220,8 +231,11 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
 
     return train_metrics, valid_metrics, test_metrics
 
+
+# EKSPERYMENT: jak waga log_cw wpływa na FID? Done - im większy logcw wym większy FID (robi sens)
+# EKSPERYMENT: jak ważenie supervised_weight wpłyawa na FID?
+# EKSPERYMENT: jak inicjalizajca wpływa na FID? norm vs onehot?
 if __name__ == "__main__":
-    
     dataset_name = "cifar"
 
     if dataset_name == "mnist":
@@ -232,14 +246,14 @@ if __name__ == "__main__":
         labeled_num = 4000
     
     # TODO: gradient clipping rzeczywiście?
-    if dataset_name == "svhn" or dataset_name == "cifar":
-        latent_dims = [128, 64]
-        learning_rates = [5e-4]
+    if dataset_name == "svhn":
+        latent_dims = [64]
+        learning_rates = [1e-5]
         distance_weights = [0.]
-        supervised_weights = [10., 100.]
-        kernel_nums = [64]
-        batch_sizes = [100]
-        hidden_dims = [256]
+        supervised_weights = [1., 10.]
+        kernel_nums = [3, 5]
+        batch_sizes = [1000]
+        hidden_dims = [512]
         gammas = [1.]
         
         # init nie ma wiekszego znaczenia chyba
@@ -251,9 +265,28 @@ if __name__ == "__main__":
         erf_weights = [0.]
         alphas = [1e-3]
 
+    elif dataset_name == "cifar":
+        latent_dims = [64]
+        learning_rates = [5e-4]
+        distance_weights = [0.]
+        supervised_weights = [10.]
+        kernel_nums = [64]
+        batch_sizes = [500]
+        hidden_dims = [256]
+        gammas = [1.]
+        
+        # init nie ma wiekszego znaczenia chyba
+        inits = [2., 4., 8.]
+        cc_eps = [0.0]
+        # labeled_super_weights = [1.0]
+        labeled_super_weights = [0.]
+        rng_seeds = [20]
+        erf_weights = [0.]
+        alphas = [1e-3]
+
     elif dataset_name == "mnist":
         latent_dims = [5]
-        distance_weights = [1., 1e2, 1e3, 1e4]
+        distance_weights = [0.]
         supervised_weights = [1.0]
         kernel_nums = [4, 5, 6]
         # dla bs=200 tez spoko dziala

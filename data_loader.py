@@ -254,7 +254,7 @@ def get_svhn(extra=True): # / 255?
 
     dataset_test = sio.loadmat("dataset/svhn/test_32x32.mat")
     dataset_test = dataset_test["X"].transpose(3, 0, 1, 2), dataset_test["y"] - 1
-    labels = list(str(i) for i in range(1, 10)) + [0]
+    labels = list(str(i) for i in range(1, 10)) + ["0"]
     # print(np.histogram(dataset_train[1]))
 
     return dataset_train, dataset_test, labels, "svhn"
