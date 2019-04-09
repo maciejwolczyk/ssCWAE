@@ -63,7 +63,17 @@ def get_batch(batch_idx, batch_size, dataset):
     # print(labeled_indices)
 
     X_labeled = dataset.labeled_train["X"][labeled_indices]
-    y_labeled = dataset.labeled_train["y"][labeled_indices]
+    if dataset.name == "celeba_multitag":
+        y_labeled = []
+        for idx, label in enumerate(dataset.labeled_train["y"][labeled_indices]):
+            positive_tags = (label == 1).nonzero()[0]
+            tag = np.random.choice(positive_tags)
+            one_hot_label = [0] * dataset.classes_num
+            one_hot_label[tag] = 1
+            y_labeled += [one_hot_label]
+        y_labeled = np.array(y_labeled)
+    else:
+        y_labeled = dataset.labeled_train["y"][labeled_indices]
     # print(y_labeled.sum(0))
 
     empty_labels = np.zeros((unlabeled_batch.shape[0], dataset.classes_num))
@@ -77,53 +87,62 @@ def get_batch(batch_idx, batch_size, dataset):
 def train_model(
         dataset_name, latent_dim=300, batch_size=100,
         labeled_examples_n=100, h_dim=400, kernel_size=4,
-        kernel_num=25, distance_weight=1.0, cc_ep=0.0, supervised_weight = 1.0,
-        rng_seed=11, init=1.0, gamma=1.0, erf_weight=1.0,
-        erf_alpha=0.05, labeled_super_weight=2.0, learning_rate=1e-3):
+        kernel_num=25, distance_weight=1.0, cw_weight=1.0,
+        supervised_weight = 1.0, rng_seed=11, init=1.0, gamma=1.0,
+        erf_weight=1.0, erf_alpha=0.05, labeled_super_weight=2.0,
+        learning_rate=1e-3):
 
 
     dataset = data_loader.get_dataset_by_name(dataset_name, rng_seed=rng_seed)
     # dataset.whitening()
+
+    keep_labels_proportions = False if dataset_name == "celeba_multitag" else True
     dataset.remove_labels_fraction(
             number_to_keep=labeled_examples_n,
-            keep_labels_proportions=True, batch_size=100)
+            keep_labels_proportions=keep_labels_proportions,
+            batch_size=100
+    )
 
     # coder = architecture.WideShaoClassifierCoder(
     #         dataset, h_dim=h_dim,
     #         kernel_size=3,
     #         kernel_num=kernel_num)
 
-    coder = architecture.CifarCoder(
+    coder = architecture.CelebaCoder(
         dataset, kernel_num=kn, h_dim=h_dim)
     # coder = architecture.FCCoder(
     #     dataset, h_dim=h_dim, layers_num=kernel_num)
     classifier_cls = architecture.DummyClassifier
 
 
-    model_type = "cwae"
+    model_type = "gmmcwae"
     model_name = (
         "{}/{}/{}/{}d_erfw{}_kn{}_hd{}_bs{}_sw{}_dw{}_a{}_gw{}_init{}" +
-        "lr{}_realsig_nobn_clipping_recd_norminit_samplingtest_noalpha_logcw1").format(
+        "cw{}_lr{}_onehotinit_alpha_nobn_notexact_cw").format(
             dataset.name, coder.__class__.__name__, model_type,
             latent_dim, erf_weight, kernel_num, h_dim,
             batch_size, supervised_weight, distance_weight, erf_alpha,
-            gamma, init, lr)
+            gamma, init, cw_weight, lr)
 
     print(model_name)
     prepare_directories(model_name)
 
-    # supervised_weight *= 0.1 * dataset.train_examples_num / labeled_examples_n
-    if model_type == "cwae":
-        model = cwae.CwaeModel(
+    supervised_weight *= dataset.train_examples_num / labeled_examples_n
+    if model_type == "gmmcwae":
+        model = cwae.GmmCwaeModel(
                 model_name, coder, dataset,
                 latent_dim=latent_dim,
                 supervised_weight=supervised_weight,
-                distance_weight=distance_weight, eps=cc_ep,
+                distance_weight=distance_weight, cw_weight=cw_weight,
                 init=init, gamma_weight=gamma, classifier_cls=classifier_cls,
                 erf_weight=erf_weight, erf_alpha=erf_alpha,
                 labeled_super_weight=labeled_super_weight, learning_rate=lr)
-    elif model_type == "vae":
-        model = vae.VAEModel(model_name, dataset, coder, latent_dim=latent_dim, lr=lr, beta=1.0)
+    elif model_type == "onecwae":
+        model = cwae.CwaeModel(
+                model_name, coder, dataset, learning_rate=lr,
+                latent_dim=latent_dim, gamma_weight=gamma,
+                cw_weight=cw_weight)
+
     else:
         raise NotImplemented
 
@@ -131,10 +150,10 @@ def train_model(
 
 
 def run_training(model, dataset, batch_size):
-    n_epochs = 200
+    n_epochs = 150
     with tf.Session(config=frugal_config) as sess:
         sess.run(tf.global_variables_initializer())
-        
+
         # TODO: restore session when using classifier
         # model.class_saver.restore(sess, "weights/classifier/epoch=100.ckpt")
         costs = []
@@ -171,19 +190,17 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
             model.placeholders["y"]: y_batch,
             model.placeholders["training"]: True}
 
-        if batch_idx % 300:
-            feed_dict[model.placeholders["train_labeled"]] = False
+        feed_dict[model.placeholders["train_labeled"]] = False
 
-        if epoch_n < 50:
-            feed_dict[model.placeholders["erf_weight"]] = 0
-
-        if epoch_n < 50:
-            feed_dict[model.placeholders["classifier_distance_weight"]] = 0
-            feed_dict[model.placeholders["distance_weight"]] = 0
+        if type(model).__name__ == "GmmCwaeModel":
+            if epoch_n < 50:
+                feed_dict[model.placeholders["erf_weight"]] = 0
+                feed_dict[model.placeholders["classifier_distance_weight"]] = 0
+                feed_dict[model.placeholders["distance_weight"]] = 0
         # elif epoch_n > 150:
         #     feed_dict[model.placeholders["classifier_distance_weight"]] = -1
         #     feed_dict[model.placeholders["distance_weight"]] = -1
-            
+
 
         sess.run(model.train_ops["full"], feed_dict=feed_dict)
 
@@ -202,18 +219,32 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
         #         (np.expand_dims(means, 0) - np.expand_dims(means, 1)) ** 2, axis=-1)[0], dist, "\n")
 
 
-    train_metrics, _, _ = metrics.evaluate_model(
-        sess, model, dataset.semi_labeled_train,
-        epoch_n, dataset, filename_prefix="train",
-        subset=3000, training_mode=False)
-    valid_metrics, valid_var, valid_mean = metrics.evaluate_model(
-        sess, model, dataset.valid,
-        epoch_n, dataset, filename_prefix="valid",
-        subset=3000, class_in_sum=False)
-    test_metrics, _, _ = metrics.evaluate_model(
-        sess, model, dataset.test,
-        epoch_n, dataset, filename_prefix="test",
-        subset=None)
+    if type(model).__name__ == "GmmCwaeModel":
+        train_metrics, _, _ = metrics.evaluate_gmmcwae(
+            sess, model, dataset.semi_labeled_train,
+            epoch_n, dataset, filename_prefix="train",
+            subset=3000, training_mode=False)
+        valid_metrics, valid_var, valid_mean = metrics.evaluate_gmmcwae(
+            sess, model, dataset.valid,
+            epoch_n, dataset, filename_prefix="valid",
+            subset=None, class_in_sum=False)
+        test_metrics, _, _ = metrics.evaluate_gmmcwae(
+            sess, model, dataset.test,
+            epoch_n, dataset, filename_prefix="test",
+            subset=None)
+    elif type(model).__name__ == "CwaeModel":
+        train_metrics, _, _ = metrics.evaluate_cwae(
+            sess, model, dataset.semi_labeled_train,
+            epoch_n, dataset, filename_prefix="train",
+            subset=3000, training_mode=False)
+        valid_metrics, valid_var, valid_mean = metrics.evaluate_cwae(
+            sess, model, dataset.valid,
+            epoch_n, dataset, filename_prefix="valid",
+            subset=None, class_in_sum=False)
+        test_metrics, _, _ = metrics.evaluate_cwae(
+            sess, model, dataset.test,
+            epoch_n, dataset, filename_prefix="test",
+            subset=None)
 
     if epoch_n % 50 == 0:
         save_path = model.saver.save(
@@ -226,17 +257,20 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
         print("Mean diff:", mean_diff)
 
         metrics.interpolation(sess, model, dataset, epoch_n)
-        metrics.sample_from_classes(sess, model, dataset, epoch_n, valid_var)
+        # metrics.sample_from_classes(sess, model, dataset, epoch_n, valid_var)
         metrics.sample_from_classes(sess, model, dataset, epoch_n, valid_var=None)
+
+    if epoch_n % 5 == 0:
+        metrics.save_distance_matrix(sess, model, epoch_n)
 
     return train_metrics, valid_metrics, test_metrics
 
 
-# EKSPERYMENT: jak waga log_cw wpływa na FID? Done - im większy logcw wym większy FID (robi sens)
-# EKSPERYMENT: jak ważenie supervised_weight wpłyawa na FID?
-# EKSPERYMENT: jak inicjalizajca wpływa na FID? norm vs onehot?
+
+
+# TODO: unlabeled dataset
 if __name__ == "__main__":
-    dataset_name = "cifar"
+    dataset_name = "celeba_singletag"
 
     if dataset_name == "mnist":
         labeled_num = 100
@@ -244,18 +278,20 @@ if __name__ == "__main__":
         labeled_num = 1000
     elif dataset_name == "cifar":
         labeled_num = 4000
-    
-    # TODO: gradient clipping rzeczywiście?
+    elif dataset_name == "celeba_multitag" or dataset_name == "celeba_singletag":
+        labeled_num = 10000
+
+
     if dataset_name == "svhn":
         latent_dims = [64]
-        learning_rates = [1e-5]
+        learning_rates = [1e-4]
         distance_weights = [0.]
         supervised_weights = [1., 10.]
         kernel_nums = [3, 5]
         batch_sizes = [1000]
         hidden_dims = [512]
         gammas = [1.]
-        
+
         # init nie ma wiekszego znaczenia chyba
         inits = [1.]
         cc_eps = [0.0]
@@ -266,17 +302,38 @@ if __name__ == "__main__":
         alphas = [1e-3]
 
     elif dataset_name == "cifar":
-        latent_dims = [64]
+        latent_dims = [16, 32]
         learning_rates = [5e-4]
+        cw_weights = [1., 5.]
         distance_weights = [0.]
-        supervised_weights = [10.]
+        supervised_weights = [0., 5.]
         kernel_nums = [64]
         batch_sizes = [500]
         hidden_dims = [256]
         gammas = [1.]
-        
-        # init nie ma wiekszego znaczenia chyba
-        inits = [2., 4., 8.]
+
+        # im większy init tym gorszy FID
+        inits = [1.]
+        cc_eps = [0.0]
+        # labeled_super_weights = [1.0]
+        labeled_super_weights = [0.]
+        rng_seeds = [20]
+        erf_weights = [0.]
+        alphas = [1e-3]
+
+    elif dataset_name == "celeba_multitag" or dataset_name == "celeba_singletag":
+        latent_dims = [64]
+        learning_rates = [5e-4]
+        cw_weights = [5.]
+        distance_weights = [0.]
+        supervised_weights = [1., 5.]
+        kernel_nums = [32, 64]
+        batch_sizes = [100, 200]
+        hidden_dims = [256]
+        gammas = [1.]
+
+        # im większy init tym gorszy FID
+        inits = [1.]
         cc_eps = [0.0]
         # labeled_super_weights = [1.0]
         labeled_super_weights = [0.]
@@ -293,7 +350,7 @@ if __name__ == "__main__":
         batch_sizes = [100]
         hidden_dims = [100, 300, 500]
         gammas = [1.0]
-        
+
         # init nie ma wiekszego znaczenia chyba
         inits = [0.1]
         cc_eps = [0.0]
@@ -305,12 +362,12 @@ if __name__ == "__main__":
 
     for hyperparams in itertools.product(
             latent_dims, kernel_nums, distance_weights,
-            hidden_dims, batch_sizes, cc_eps, labeled_super_weights,
+            hidden_dims, batch_sizes, cw_weights, labeled_super_weights,
             rng_seeds, supervised_weights, inits, gammas,
             erf_weights, alphas, learning_rates):
-        ld, kn, dw, hd, bs, ccep, lsw, rs, sw, init, gamma, erf, alpha, lr = hyperparams
+        ld, kn, dw, hd, bs, cw, lsw, rs, sw, init, gamma, erf, alpha, lr = hyperparams
         train_model(dataset_name, latent_dim=ld, h_dim=hd,
-            distance_weight=dw, kernel_num=kn, cc_ep=ccep,
+            distance_weight=dw, kernel_num=kn, cw_weight=cw,
             batch_size=bs, labeled_examples_n=labeled_num, rng_seed=rs,
             supervised_weight=sw, init=init, gamma=gamma,
             erf_weight=erf, erf_alpha=alpha, labeled_super_weight=lsw, learning_rate=lr)

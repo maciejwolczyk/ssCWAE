@@ -163,3 +163,20 @@ x + 1) Wrzucamy wszystkie polabelowane do latent space i liczymy średnie żeby 
 
 2018-11-28
 1) Odległość w erfie trzeba dzielić przez liczbę wymiarów, inaczej jest równa zero. Mądrzejszy sposób normalizacji?
+
+
+-----------------------------------------------
+
+EKSPERYMENT: jak waga log_cw wpływa na FID? Done - im większy logcw wym większy FID (robi sens)
+EKSPERYMENT: jak ważenie supervised_weight wpłyawa na FID? - Done, im większe supervised tym gorszy FID
+EKSPERYMENT: jak inicjalizajca wpływa na FID? norm vs onehot? - Onehot lepsze
+
+PYTANIEten model zaczął działać dla takich ustawień jak w CWAE. Czy to batch_norm? Czy to dziwna architektura?
+
+EKSPERYMENT: czy moja implementacja cpd jest taka sama jak Szymona?
+EKSPERYMENT: cpd vs cw na jednym gaussie
+
+EKSPERYMENT: cpd vs cw na gmm
+EKSPERYMENT: batch_norm trainable=False
+
+OBSERWACJA: batch_norm w latent space bardzo niestabilny. Przetstować na większym modelu (np. 64d)

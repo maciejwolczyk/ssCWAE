@@ -3,9 +3,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 plt.switch_backend("agg")
 import scipy.io as sio
+import os
 
 from sklearn.model_selection import train_test_split
 from sklearn.decomposition import PCA
+from tqdm import tqdm
+from PIL import Image
 
 
 class Dataset:
@@ -25,8 +28,13 @@ class Dataset:
         train_y = train_y.squeeze()
         test_y = test_y.squeeze()
 
+        if len(train_y.shape) == 1:
+            self.classes_num = max(train_y.max(), test_y.max()) + 1
+            train_y = one_hot_vectorize(train_y, self.classes_num)
+            test_y = one_hot_vectorize(test_y, self.classes_num)
+        else:
+            self.classes_num = train_y.shape[-1]
 
-        self.classes_num = max(train_y.max(), test_y.max()) + 1
 
         self.train_examples_num = len(train_X)
         self.test_examples_num = len(test_X)
@@ -37,11 +45,11 @@ class Dataset:
             self.image_shape = self.image_shape + [1,]
 
         self.train = {"X": train_X.reshape(self.train_examples_num, -1),
-                      "y": one_hot_vectorize(train_y, self.classes_num)}
+                      "y": train_y}
 
         self.test = {"X": test_X.reshape(self.test_examples_num, -1),
-                      "y": one_hot_vectorize(test_y, self.classes_num)}
-        
+                      "y": test_y}
+
         self.valid = {"X": self.train["X"][-5000:],
                       "y": self.train["y"][-5000:]}
 
@@ -121,8 +129,9 @@ class Dataset:
 
 
         labels = np.copy(self.train["y"])
+        print("Labels len", len(labels), "shape", labels.shape)
         labels_props = self.train["y"].sum(0) / self.train["y"].sum()
-        
+
         # TODO: naprawić proporcje
         # labels_props = np.array([0.1] * 10)
 
@@ -167,27 +176,29 @@ class Dataset:
         removed_indices = np.logical_not(remain_indices)
         print("Indices", remain_indices, removed_indices)
 
-        # Get remain indices per class
-        argmaxed_y = self.train["y"].argmax(1)
-        class_examples = []
-        for val in range(self.classes_num):
-            remain_val = np.logical_and(argmaxed_y == val, remain_indices)
-            remain_val = np.where(remain_val)[0].tolist()
-            class_examples += [remain_val]
-
-        # Make every batch balanced
-        batch_num = number_to_keep // batch_size
-        remain_indices = []
-        for batch_idx in range(batch_num + 1):
+        if keep_labels_proportions:
+            # Get remain indices per class
+            argmaxed_y = self.train["y"].argmax(1)
+            class_examples = []
             for val in range(self.classes_num):
-                start_range = int(batch_idx * batch_size * labels_props[val])
-                end_range = int((batch_idx + 1) * batch_size * labels_props[val])
-                remain_indices += class_examples[val][start_range:end_range]
-        remain_indices = np.array(remain_indices)
+                remain_val = np.logical_and(argmaxed_y == val, remain_indices)
+                remain_val = np.where(remain_val)[0].tolist()
+                class_examples += [remain_val]
 
-        print(self.train["y"][remain_indices].argmax(1))
+            # Make every batch balanced
+            batch_num = number_to_keep // batch_size
+            remain_indices = []
+            for batch_idx in range(batch_num + 1):
+                for val in range(self.classes_num):
+                    start_range = int(batch_idx * batch_size * labels_props[val])
+                    end_range = int((batch_idx + 1) * batch_size * labels_props[val])
+                    remain_indices += class_examples[val][start_range:end_range]
+            remain_indices = np.array(remain_indices)
+
+            print(self.train["y"][remain_indices].argmax(1))
 
         # Kolejnosc
+        print("remain", remain_indices.shape, "removed", removed_indices.shape)
         remain_indices = np.where(remain_indices)[0]
         removed_indices = np.where(removed_indices)[0]
         self.rng.shuffle(remain_indices)
@@ -196,7 +207,8 @@ class Dataset:
 
         self.labeled_train = {"X": self.train["X"][remain_indices],
                               "y": self.train["y"][remain_indices]}
-        self.unlabeled_train = {"X": self.train["X"][removed_indices]}
+
+        self.unlabeled_train = {"X": self.train["X"].copy()}
         print("Proportions in labeled sample",
             self.labeled_train["y"].sum(0) / self.labeled_train["y"].sum(),
             self.labeled_train["y"].sum())
@@ -205,9 +217,9 @@ class Dataset:
         self.unlabeled_examples_num = len(self.unlabeled_train["X"])
 
         semi_labeled_X = np.vstack(
-            (self.labeled_train["X"], self.unlabeled_train["X"]))
+            (self.labeled_train["X"], self.train["X"][removed_indices]))
         dummy_y = np.zeros(
-            (self.unlabeled_examples_num, self.classes_num))
+            (len(removed_indices), self.classes_num))
         semi_labeled_y = np.vstack((self.labeled_train["y"], dummy_y))
 
         self.semi_labeled_train = {"X": semi_labeled_X,
@@ -248,7 +260,7 @@ def get_svhn(extra=True): # / 255?
         dataset_extra = sio.loadmat("dataset/svhn/extra_32x32.mat")
         dataset_extra = dataset_extra["X"].transpose(3, 0, 1, 2), dataset_extra["y"] - 1
         dataset_train = (
-            np.concatenate([dataset_train[0], dataset_extra[0]], axis=0), 
+            np.concatenate([dataset_train[0], dataset_extra[0]], axis=0),
             np.concatenate([dataset_train[1], dataset_extra[1]], axis=0)
         )
 
@@ -273,16 +285,143 @@ def get_cifar():
     return cifar_train, cifar_test, labels, "cifar"
 
 def get_celeba_images(examples_num):
-    X = []
-    for idx in tnrange(1, examples_num+1):
-        a = plt.imread("dataset/img_align_celeba_64x64/{}.jpg".format(str(idx).zfill(6)))
 
-        if len(a.shape) == 2:
-            a = np.repeat(a, 3).reshape(64, 64, 3)
-        X += [a / 255]
-    # print(list(x.shape for x in X))
-    return np.array(X).reshape(examples_num, -1)
+    dataset_dir = "/mnt/users/mwolczyk/local/Repos/networks-do-networks/dataset/img_align_celeba/"
+    crop_size = [128, 128]
+    target_size = [64, 64]
+    orig_size = [178, 218]
 
+    start_y = (orig_size[1] - crop_size[0]) // 2
+    start_x = (orig_size[0] - crop_size[1]) // 2
+
+    loaded_images = []
+
+    for idx, img_name in enumerate(tqdm(os.listdir(dataset_dir))):
+        if examples_num is not None and idx >= examples_num:
+            break
+        img = Image.open(dataset_dir + img_name).convert("RGB")
+        img = img.crop((
+            start_x,
+            start_y,
+            start_x + crop_size[0],
+            start_y + crop_size[1]
+        ))
+        img = np.array(img.resize(target_size, Image.BILINEAR)) / 255
+        loaded_images += [img]
+
+    return np.array(loaded_images)
+
+
+# TODO: singletag
+def get_celeba_multitag():
+    examples_num = 200000
+    attr_labels = [
+        "5_o_Clock_Shadow", "Arched_Eyebrows", "Attractive",
+        "Bags_Under_Eyes", "Bald", "Bangs", "Big_Lips", "Big_Nose",
+        "Black_Hair", "Blond_Hair", "Blurry", "Brown_Hair", "Bushy_Eyebrows",
+        "Chubby", "Double_Chin", "Eyeglasses", "Goatee", "Gray_Hair",
+        "Heavy_Makeup", "High_Cheekbones", "Male", "Mouth_Slightly_Open",
+        "Mustache", "Narrow_Eyes", "No_Beard", "Oval_Face", "Pale_Skin",
+        "Pointy_Nose", "Receding_Hairline", "Rosy_Cheeks", "Sideburns",
+        "Smiling", "Straight_Hair", "Wavy_Hair", "Wearing_Earrings",
+        "Wearing_Hat", "Wearing_Lipstick", "Wearing_Necklace", "Wearing_Necktie",
+        "Young"
+    ]
+    dataset_dir = "/mnt/users/mwolczyk/local/Repos/networks-do-networks/dataset/"
+
+    chosen_attributes = ["Heavy_Makeup", "Male", "Smiling"]
+    chosen_indices = [idx for idx, label in enumerate(attr_labels)
+                      if label in chosen_attributes]
+
+
+    X = get_celeba_images(examples_num)
+    Y = []
+    with open(dataset_dir + "/list_attr_celeba.txt") as f:
+        f.readline() # Omitting header
+        f.readline() # Omitting label list
+        for idx, line in enumerate(f):
+            if examples_num is not None and idx >= examples_num:
+                break
+
+            labels = line.split()[1:]  # skip filename in the first column
+            one_hot_label = [0] * (len(chosen_attributes) + 1)
+
+
+            for idx, attr_idx in enumerate(chosen_indices):
+                val = int(labels[attr_idx])
+                if val == 1:
+                    one_hot_label[idx] = 1
+                elif val == -1:
+                    pass
+                else:
+                    raise ValueError("Ani jeden ani minus jeden: {}".format(label))
+            Y += [one_hot_label]
+    Y = np.array(Y)
+
+    # If the example has no representation, pick
+    Y[Y.sum(1) == 0, -1] = 1
+    print("Ratio of labels:", Y.sum(axis=0) / Y.shape[0])
+    print("Nonzero count", np.count_nonzero(Y.sum(1)))
+
+    train_x, test_x, train_y, test_y = train_test_split(X, Y, test_size=0.1)
+    return (train_x, train_y), (test_x, test_y), chosen_attributes + ["None"], "celeba_multitag"
+
+def get_celeba_singletag():
+    examples_num = 200000
+    attr_labels = [
+        "5_o_Clock_Shadow", "Arched_Eyebrows", "Attractive",
+        "Bags_Under_Eyes", "Bald", "Bangs", "Big_Lips", "Big_Nose",
+        "Black_Hair", "Blond_Hair", "Blurry", "Brown_Hair", "Bushy_Eyebrows",
+        "Chubby", "Double_Chin", "Eyeglasses", "Goatee", "Gray_Hair",
+        "Heavy_Makeup", "High_Cheekbones", "Male", "Mouth_Slightly_Open",
+        "Mustache", "Narrow_Eyes", "No_Beard", "Oval_Face", "Pale_Skin",
+        "Pointy_Nose", "Receding_Hairline", "Rosy_Cheeks", "Sideburns",
+        "Smiling", "Straight_Hair", "Wavy_Hair", "Wearing_Earrings",
+        "Wearing_Hat", "Wearing_Lipstick", "Wearing_Necklace", "Wearing_Necktie",
+        "Young"
+    ]
+    dataset_dir = "/mnt/users/mwolczyk/local/Repos/networks-do-networks/dataset/"
+
+    chosen_attributes = ["Male", "Smiling"]
+    chosen_indices = [idx for idx, label in enumerate(attr_labels)
+                      if label in chosen_attributes]
+
+    # TODO: to trzeba madrzej
+    classes_num = 4
+    labels_names = ["Not Male, Not Smiling", "Not Male, Smiling", "Male, Not Smiling", "Male and Smiling"]
+
+    X = get_celeba_images(examples_num)
+    Y = []
+    with open(dataset_dir + "/list_attr_celeba.txt") as f:
+        f.readline() # Omitting header
+        f.readline() # Omitting label list
+        for idx, line in enumerate(f):
+            if examples_num is not None and idx >= examples_num:
+                break
+
+            labels = line.split()[1:]  # skip filename in the first column
+
+            label_val = 0
+            for idx, attr_idx in enumerate(chosen_indices):
+                label_val *= 2
+                val = int(labels[attr_idx])
+                if val == 1:
+                    label_val += 1
+                elif val == -1:
+                    pass
+                else:
+                    raise ValueError("Ani jeden ani minus jeden: {}".format(label))
+
+            Y += [label_val]
+    Y = np.array(Y)
+
+    # If the example has no representation, pick
+    # Y[Y.sum(1) == 0, -1] = 1
+    # print("Ratio of labels:", Y.sum(axis=0) / Y.shape[0])
+    # print("Nonzero count", np.count_nonzero(Y.sum(1)))
+
+    train_x, test_x, train_y, test_y = train_test_split(X, Y, test_size=0.1)
+    return (train_x, train_y), (test_x, test_y), labels_names, "celeba_singletag"
 
 def get_celeba_smiles():
     NUM_EXAMPLES = 199999
@@ -345,7 +484,10 @@ def get_dataset_by_name(name, rng_seed):
        "svhn": get_svhn,
        "cifar": get_cifar,
        "celeba_smiles": get_celeba_smiles,
-       "celeba_glasses": get_celeba_glasses}
+       "celeba_glasses": get_celeba_glasses,
+       "celeba_multitag": get_celeba_multitag,
+       "celeba_singletag": get_celeba_singletag
+    }
 
     getter = dataset_getters[name]
     train, test, labels, name = getter()

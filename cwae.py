@@ -6,6 +6,58 @@ import tensorflow.train as tft
 from math import pi
 
 import architecture
+from wae_cost import WAECost
+
+
+def positive_kernel(X, Y):
+    X = tf.expand_dims(X, 0)
+    Y = tf.expand_dims(Y, 1)
+    return -1.0 * tf.norm(X - Y, axis=2, ord=2)
+
+def conditionally_positive_distance(X):
+    normal_sample = tf.random.normal(shape=tf.shape(X))
+
+    kernel_function = positive_kernel
+    # kernel_function = lambda x, y: -1.0 * tf.sqrt(tf.abs(x - y))
+
+    n = tf.shape(X)[0]
+    no_diagonal_mask = tf.cast(1 - tf.eye(n), tf.bool)
+    A = tf.boolean_mask(kernel_function(X, X), no_diagonal_mask)
+    A = tf.reduce_mean(A)
+    B = kernel_function(normal_sample, normal_sample)
+    B = tf.reduce_mean(tf.boolean_mask(B, no_diagonal_mask))
+
+    C = kernel_function(X, normal_sample)
+    C = 2. * tf.reduce_mean(C)
+    return A + B - C
+
+def gmm_conditionally_positive_distance(X, means, z_dim):
+    normal_sample = tf.random.normal(shape=tf.shape(X))
+    n = tf.shape(X)[0]
+
+    examples_per_class = n // 10
+    tf.shape(X)
+
+    # means: [classes_num, z_dim]
+    means = tf.expand_dims(means, 0)
+    means = tf.tile(means, (examples_per_class, 1, 1))
+    means = tf.reshape(means, (-1, z_dim))
+
+    normal_sample = normal_sample + means
+
+    kernel_function = positive_kernel
+    # kernel_function = lambda x, y: -1.0 * tf.sqrt(tf.abs(x - y))
+
+    no_diagonal_mask = tf.cast(1 - tf.eye(n), tf.bool)
+    A = tf.boolean_mask(kernel_function(X, X), no_diagonal_mask)
+    A = tf.reduce_mean(A)
+    B = kernel_function(normal_sample, normal_sample)
+    B = tf.reduce_mean(tf.boolean_mask(B, no_diagonal_mask))
+
+    C = kernel_function(X, normal_sample)
+    C = 2. * tf.reduce_mean(C)
+    return A + B - C
+
 
 def cramer_wold_distance(X, m, alpha, p, gamma):
     N = tf.cast(tf.shape(X)[0], tf.float32)
@@ -36,6 +88,30 @@ def cramer_wold_distance(X, m, alpha, p, gamma):
     C2 = phi_d(C1 / (2 * (alpha + 2 * gamma)), D)
     class_logits = C2
     C3 = 2 * p / (N * tf.sqrt(2 * pi * (alpha + 2 * gamma))) * C2
+    C = tf.reduce_sum(C3)
+    return tf.reduce_mean(A + B - C)
+
+def single_cramer_wold_distance(X, gamma):
+    N = tf.cast(tf.shape(X)[0], tf.float32)
+    D = tf.cast(tf.shape(X)[1], tf.float32)
+    # N0 = 73257
+    N0 = N
+
+    alpha = 1
+
+    X_sub_matrix = tf.subtract(tf.expand_dims(X, 0), tf.expand_dims(X, 1))
+    A1 = norm_squared(X_sub_matrix, axis=2)
+
+    A1 = tf.reduce_sum(phi_d(A1 / (4 * gamma), D))
+    A = 1/(N*N * tf.sqrt(2 * pi * 2 * gamma)) * A1
+
+    B3 = 1 / tf.sqrt(2 * pi * (alpha + 2 * gamma))
+    B = tf.reduce_sum(B3)
+
+    C1 = norm_squared(X, axis=1)
+    C2 = phi_d(C1 / (2 * (alpha + 2 * gamma)), D)
+    class_logits = C2
+    C3 = 2 / (N * tf.sqrt(2 * pi * (alpha + 2 * gamma))) * C2
     C = tf.reduce_sum(C3)
     return tf.reduce_mean(A + B - C)
 
@@ -119,7 +195,7 @@ class CwaeClassifier:
             self, tensor_x, tensor_labels, train_labeled, labeled_mask,
             tensor_distance_weight, tensor_training, z_dim):
 
-        N0 = tf.shape(tensor_x)[0] 
+        N0 = tf.shape(tensor_x)[0]
         # D = tf.shape(tensor_x)[-1]
         gamma = tf.cast(tf.pow(4 / (3 * N0 / self.dataset.classes_num), 0.4), tf.float32)
         means, variances, probs = get_gaussians(z_dim, 1.0, self.dataset)
@@ -127,7 +203,6 @@ class CwaeClassifier:
         tensor_z = self.coder.encode(tensor_x, z_dim)
         tensor_y = self.coder.decode(tensor_z, self.dataset.x_dim)
 
-        # TODO: dokoncz to
         unsupervised_tensor_z = tf.cond(
             train_labeled,
             lambda: tensor_z,
@@ -181,15 +256,106 @@ class CwaeClassifier:
         return full_cost
 
 
-
 class CwaeModel():
+
+    def __init__(
+        self, name, coder, dataset, latent_dim=300,
+        learning_rate=1e-3, gamma_weight=1.0, cw_weight=1.0):
+
+
+        self.name = name
+        self.z_dim = latent_dim
+        tf.reset_default_graph()
+
+        optimizer = tft.AdamOptimizer(learning_rate)
+        tensor_x = tf.placeholder(
+                shape=[None, dataset.x_dim],
+                dtype=tf.float32, name='input_x')
+        tensor_labels = tf.placeholder(
+                shape=[None, dataset.classes_num],
+                dtype=tf.float32, name='target_y')
+        train_labeled = tf.placeholder_with_default(True, shape=[])
+        tensor_training = tf.placeholder_with_default(False, shape=[])
+
+        labeled_mask = get_labels_mask(tensor_labels)
+        means, variances, probs = get_gaussians(latent_dim, 0., dataset, 1)
+
+        tensor_z = coder.encode(tensor_x, latent_dim, tensor_training)
+        tensor_y = coder.decode(tensor_z, dataset.x_dim, tensor_training)
+
+        rec_cost = norm_squared(tensor_x - tensor_y, axis=-1)
+        rec_cost = tf.cond(
+            train_labeled,
+            lambda: tf.reduce_mean(rec_cost),
+            lambda: tf.reduce_mean(
+                tf.boolean_mask(rec_cost, tf.logical_not(labeled_mask)))
+        )
+
+        unsupervised_tensor_z = tf.cond(
+            train_labeled,
+            lambda: tensor_z,
+            lambda: tf.boolean_mask(tensor_z, tf.logical_not(labeled_mask))
+        )
+
+        N0 = tf.shape(unsupervised_tensor_z)[0]
+        gamma = tf.cast(tf.pow(4 / (3 * N0), 0.4), tf.float32)
+        gamma *= gamma_weight
+
+        # TODO: log_cw
+        # cw_cost = single_cramer_wold_distance(unsupervised_tensor_z, gamma)
+        cw_cost = WAECost("jacek_regular").evaluate(unsupervised_tensor_z, latent_dim)
+        log_cw_cost = cw_weight * tf.log(cw_cost)
+
+        cpd_cost = conditionally_positive_distance(unsupervised_tensor_z)
+        cpd_cost *= cw_weight
+
+        full_cost = tf.reduce_mean(rec_cost + cw_cost)
+        train_op = optimizer.minimize(full_cost)
+
+        full_cpd_cost = tf.reduce_mean(rec_cost + cpd_cost)
+        cpd_train_op = optimizer.minimize(full_cpd_cost)
+
+        self.saver = tf.train.Saver(max_to_keep=10000)
+        self.placeholders = {
+            "X": tensor_x,
+            "y": tensor_labels,
+            "train_labeled": train_labeled,
+            "training": tensor_training,
+        }
+
+        self.costs = {
+            "full": full_cost,
+            "full_cpd": full_cpd_cost,
+            "reconstruction": rec_cost,
+            "cw": log_cw_cost,
+            "cpd": cpd_cost
+        }
+
+        self.train_ops = {
+            "full": train_op,
+            "full_cpd": cpd_train_op
+        }
+
+        self.gausses = {
+            "means": means,
+            "variations": variances,
+            "probs": probs
+        }
+        self.out = {
+            "z": tensor_z,
+            "y": tensor_y
+        }
+
+
+class GmmCwaeModel():
     def __init__(
         self, name, coder, dataset, latent_dim=300,
         supervised_weight=1.0, distance_weight=1.0,
         erf_weight=1.0, erf_alpha=0.05,
-        learning_rate=1e-3,
+        learning_rate=1e-3, cw_weight=1.0,
         classifier_cls=EntropyClassifier, classifier_distance_weight=1.0,
         eps=1e-2, init=1.0, gamma_weight=1.0, labeled_super_weight=2.0):
+
         tf.reset_default_graph()
         self.name = name
         self.init = init
@@ -204,6 +370,7 @@ class CwaeModel():
         z_dim = latent_dim
 
 
+        # self.prepare_placeholders()
         # Prepare placeholders
         tensor_x = tf.placeholder(
                 shape=[None, x_dim],
@@ -219,7 +386,7 @@ class CwaeModel():
         tensor_erf_weight = tf.placeholder_with_default(erf_weight, shape=[])
         tensor_training = tf.placeholder_with_default(False, shape=[])
 
-        labeled_mask = self.get_labels_mask(tensor_labels)
+        labeled_mask = get_labels_mask(tensor_labels)
 
 
         if classifier_cls != architecture.DummyClassifier:
@@ -260,7 +427,9 @@ class CwaeModel():
             examples_num = tf.shape(tensor_x)[0]
             simplex_y = tf.constant([0.1] * dataset.classes_num)
             norm_probs = tf.ones((examples_num,), dtype=tf.float32) / tf.cast(examples_num, tf.float32)
-            
+
+
+
 
         # Coder and decoder
         # TODO: bardzo glupie, N0 nie moze byc liczone na podstawie tensor_x,
@@ -278,9 +447,10 @@ class CwaeModel():
             train_labeled,
             lambda: tensor_z,
             lambda: tf.boolean_mask(tensor_z, tf.logical_not(labeled_mask)))
-
-        means, variances, probs = get_gaussians(z_dim, init, dataset)
         N0 = tf.shape(unsupervised_tensor_z)[0]
+
+        means, variances, probs = get_gaussians(z_dim, init, dataset, dataset.classes_num)
+
         gamma = tf.cast(tf.pow(4 / (3 * N0 / dataset.classes_num), 0.4), tf.float32)
         gamma *= self.gamma_weight
 
@@ -296,7 +466,11 @@ class CwaeModel():
                 unsupervised_tensor_z, means, variances, probs, gamma)
         # cw_cost = tf.Print(cw_cost, [cw_cost])
         log_cw_cost = tf.log(cw_cost)
-        log_cw_cost *= 1
+        log_cw_cost *= cw_weight
+
+        # TODO:
+        cpd_cost = gmm_conditionally_positive_distance(unsupervised_tensor_z, means, z_dim)
+        # log_cw_cost = cpd_cost
 
         rec_cost = norm_squared(tensor_x - tensor_y, axis=-1)
         log_rec_cost = tf.cond(
@@ -331,11 +505,16 @@ class CwaeModel():
             dataset, training_mode=tensor_training)
         norm_weight = 10.
         norm_cost = norm_weight * norm_cost
-
-        erf_cost = self.total_erf(means, probs, alpha=erf_alpha)
-
+        erf_cost = self.total_erf(
+            means, probs,
+            alpha=erf_alpha, classes_num=dataset.classes_num
+        )
         distance_cost = linear_distance_penalty(
                 z_dim, means, variances, probs, dataset.classes_num)
+
+
+        # self.prepare_costs(
+        #     rec_cost, log_cw_cost, distance_cost, cec_cost):
 
         unsupervised_cost = tf.reduce_mean(
                 rec_cost
@@ -344,7 +523,7 @@ class CwaeModel():
 
         full_gmm_cost = tf.reduce_mean(
                 rec_cost
-                + gmm_weight * gmm_cost
+                + gmm_cost
                 # + log_cw_cost
                 + tensor_supervised_weight * class_cost
                 # + tensor_distance_weight * distance_cost
@@ -460,8 +639,9 @@ class CwaeModel():
             "gmm": gmm_cost,
             "norm": norm_cost,
             "erf": erf_cost,
+            "cpd": cpd_cost,
             "full": full_cost,
-            "unsupervised": unsupervised_cost
+            "unsupervised": unsupervised_cost,
         }
 
         self.train_ops = {
@@ -486,12 +666,6 @@ class CwaeModel():
         self.supervised_train_op = supervised_train_op
         self.preds = class_logits
 
-
-    def get_labels_mask(self, tensor_labels):
-        one = tf.constant(1, tf.float32)
-        labels_mask = tf.equal(one, tf.reduce_sum(tensor_labels, axis=-1))
-        labels_mask = tf.cast(labels_mask, tf.bool)
-        return labels_mask
 
     def pairwise_erf(self, first_mean, first_prob,
                      second_mean, second_prob, alpha):
@@ -555,7 +729,7 @@ class CwaeModel():
         self_cost = 1 / tf.sqrt(2 * pi * (2 + 2 * gamma))
 
         return tf.log(tf.reduce_mean(sample_cost + self_cost - dist_cost))
-            
+
 
     def gmm_imitation_cost(
             self, tensor_z, tensor_target,
@@ -600,7 +774,7 @@ class CwaeModel():
                     tf.expand_dims(tensor_z, 0) - means) / (2 * variances + 4 * gamma)
             # shape: [class_num, data_points]
             # dist_cost = tf.Print(dist_cost, [tf.shape(dist_cost), tf.shape(tensor_z), tf.shape(means[idx])])
-            # kde_weights[idx] 
+            # kde_weights[idx]
             dist_cost = phi_d(dist_cost, D) * kde_weights[idx]
             dist_cost /= tf.sqrt(2 * pi * (variances + 2 * gamma))
             dist_cost = 2 * tf.reduce_sum(dist_cost, axis=1)
@@ -789,6 +963,13 @@ class CwaeModel():
 # ========== HELPER FUNCTIONS ==========
 # ======================================
 
+
+def get_labels_mask(tensor_labels):
+    one = tf.constant(1, tf.float32)
+    labels_mask = tf.equal(one, tf.reduce_sum(tensor_labels, axis=-1))
+    labels_mask = tf.cast(labels_mask, tf.bool)
+    return labels_mask
+
 def norm_squared(X, axis=-1):
     return tf.reduce_sum(tf.square(X), axis=axis)
 
@@ -848,8 +1029,8 @@ def get_global_std(tensor_z, means, variances, probs, classes_num):
     return z_std
 
 
-def get_gaussians(z_dim, init, dataset):
-    G = dataset.classes_num
+def get_gaussians(z_dim, init, dataset, gauss_num):
+    G = gauss_num
     with tf.variable_scope("gmm", reuse=False):
         np.random.seed(25)
         print(init, G, z_dim)
@@ -857,22 +1038,27 @@ def get_gaussians(z_dim, init, dataset):
 
 
         one_hot = np.zeros([G, z_dim])
-        one_hot[np.arange(G), np.arange(G)] = 1 
+        one_hot[np.arange(G), np.arange(G)] = 1
         one_hot *= init
+        one_hot += np.random.normal(0, .001, size=one_hot.shape)
         # TODO: means = tf.constant()
 
 
         variable_means = True
-        if variable_means:
-            means_initialization = tf.constant_initializer(
-                np.random.normal(0, init, size=(G, z_dim)))
-            # means_initialization = tf.constant_initializer(one_hot)
+        if gauss_num == 1:
+            means = tf.constant([[0] * z_dim], dtype=tf.float32)
+        elif variable_means:
+            # means_initialization = tf.constant_initializer(
+            #     np.random.normal(0, init, size=(G, z_dim)))
+            means_initialization = tf.constant_initializer(one_hot)
             means = tf.get_variable(
                     "gmm_means", [G, z_dim],
                     initializer=means_initialization)
         else:
             means = tf.constant(one_hot, dtype=tf.float32)
                 # initializer=tf.random_uniform_initializer(-1.0, 1.0))
+
+
 
         # var_initialization = tf.constant_initializer(
         #     np.random.uniform(0.0, 1.0, size=(G)))
@@ -882,8 +1068,8 @@ def get_gaussians(z_dim, init, dataset):
 
         # Three ways to calculate p_k
 
-        # labels_proportions = (
-        #     dataset.labeled_train["y"].sum(0) / dataset.labeled_train["y"].sum())
+        labels_proportions = (
+            dataset.labeled_train["y"].sum(0) / dataset.labeled_train["y"].sum())
         # probs = tf.constant(labels_proportions, dtype=tf.float32)
         probs = tf.constant([1 / G] * G, dtype=tf.float32)
 
@@ -908,8 +1094,8 @@ def calculate_cw_logits(tensor_z, means, alpha, p, gamma=None):
     D = tf.cast(tf.shape(tensor_z)[1], tf.float32)
     # N0 = 100
     N0 = N // 2 # TODO: czy nie?
-    G = 10
-    
+    G = tf.shape(means)[0]
+
     if gamma is None:
         gamma = tf.pow(4 / (3 * (N0 / G)), 0.4)
         # gamma = tf.pow(4 / (3 / G), 0.4)
@@ -1056,7 +1242,7 @@ def cw_distance_penalty(self, z_dim, means, variances, probs, classes_num):
     # probs *= 10
 
     N0 = 100
-    G = 10
+    G = tf.shape(means)[0]
     # gamma = tf.pow(4 / (3 * N0 / G), 0.4)
     gamma = self.gamma
     # gamma = 5.0 # evil trick
