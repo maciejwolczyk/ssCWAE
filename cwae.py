@@ -349,8 +349,8 @@ class CwaeModel():
 
 class GmmCwaeModel():
     def __init__(
-        self, name, coder, dataset, latent_dim=300,
-        supervised_weight=1.0, distance_weight=1.0,
+        self, name, coder, dataset, m1=None,
+        z_dim=300, supervised_weight=1.0, distance_weight=1.0,
         erf_weight=1.0, erf_alpha=0.05,
         learning_rate=1e-3, cw_weight=1.0,
         classifier_cls=EntropyClassifier, classifier_distance_weight=1.0,
@@ -364,10 +364,14 @@ class GmmCwaeModel():
         optimizer = tft.AdamOptimizer(learning_rate)
         self.optimizer = optimizer
         self.classifier_cls = classifier_cls
+        self.m1 = m1
 
-        im_h, im_w, im_c = dataset.image_shape
-        x_dim = dataset.x_dim
-        z_dim = latent_dim
+        self.z_dim = z_dim
+
+        if m1 is not None:
+            x_dim = m1.z_dim
+        else:
+            x_dim = dataset.x_dim
 
 
         # self.prepare_placeholders()
@@ -451,7 +455,7 @@ class GmmCwaeModel():
 
         means, variances, probs = get_gaussians(z_dim, init, dataset, dataset.classes_num)
 
-        gamma = tf.cast(tf.pow(4 / (3 * N0 / dataset.classes_num), 0.4), tf.float32)
+        gamma = tf.cast(tf.pow(4 / (3 * N0 / dataset.classes_num), 0.4), tf.float32): X_batch})
         gamma *= self.gamma_weight
 
         class_logits = calculate_logits(
@@ -547,6 +551,7 @@ class GmmCwaeModel():
                 + tensor_supervised_weight * cec_cost)
 
         full_cec_erf_cost = tf.reduce_mean(
+
                 rec_cost
                 + tensor_distance_weight * distance_cost
                 + tensor_supervised_weight * cec_cost
@@ -959,6 +964,106 @@ class GmmCwaeModel():
 
         return tf.reduce_sum(cwae_sum)
 
+class MultiGmmCwaeModel():
+    def __init__(
+        self, name, coder, dataset, latent_dim=300, gaussians_per_class=1,
+        learning_rate=1e-3, gamma_weight=1.0, cw_weight=1.0,
+        supervised_weight=1.0, init=1.0):
+
+
+        self.name = name
+        self.z_dim = latent_dim
+        self.gaussians_per_class = gaussians_per_class
+        tf.reset_default_graph()
+
+
+        optimizer = tft.AdamOptimizer(learning_rate)
+        tensor_x = tf.placeholder(
+                shape=[None, dataset.x_dim],
+                dtype=tf.float32, name='input_x')
+        tensor_labels = tf.placeholder(
+                shape=[None, dataset.classes_num],
+                dtype=tf.float32, name='target_y')
+        train_labeled = tf.placeholder_with_default(True, shape=[])
+        tensor_training = tf.placeholder_with_default(False, shape=[])
+
+        print("gaussians_per_class", gaussians_per_class)
+        gaussians_num = dataset.classes_num * gaussians_per_class
+        labeled_mask = get_labels_mask(tensor_labels)
+        means, variances, probs = get_gaussians(
+            latent_dim, init, dataset, gaussians_num)
+
+        tensor_z = coder.encode(tensor_x, latent_dim, tensor_training)
+        tensor_y = coder.decode(tensor_z, dataset.x_dim, tensor_training)
+
+        rec_cost = norm_squared(tensor_x - tensor_y, axis=-1)
+        rec_cost = tf.cond(
+            train_labeled,
+            lambda: tf.reduce_mean(rec_cost),
+            lambda: tf.reduce_mean(
+                tf.boolean_mask(rec_cost, tf.logical_not(labeled_mask)))
+        )
+
+        unsupervised_tensor_z = tf.cond(
+            train_labeled,
+            lambda: tensor_z,
+            lambda: tf.boolean_mask(tensor_z, tf.logical_not(labeled_mask))
+        )
+
+        N0 = tf.shape(unsupervised_tensor_z)[0]
+        gamma = tf.cast(tf.pow(4 / (3 * N0 / gaussians_num), 0.4), tf.float32)
+        gamma *= gamma_weight
+
+        # TODO: clean this mess up
+        class_logits = calculate_logits(tensor_z, means, variances, probs)
+        class_probs = tf.nn.softmax(class_logits) # [N, G * K]
+        class_probs = tf.reshape(class_probs, (-1, dataset.classes_num, gaussians_per_class))
+        class_probs = tf.reduce_sum(class_probs, -1)
+
+        class_cost = calculate_probs_cost(
+            class_probs, tensor_labels, labeled_mask)
+        class_cost *= supervised_weight
+
+
+        # TODO: log_cw
+        cw_cost = cramer_wold_distance(unsupervised_tensor_z, means, variances, probs, gamma)
+        log_cw_cost = cw_weight * tf.log(cw_cost)
+
+        full_cost = tf.reduce_mean(rec_cost + log_cw_cost + class_cost)
+        train_op = optimizer.minimize(full_cost)
+
+        self.saver = tf.train.Saver(max_to_keep=10000)
+        self.placeholders = {
+            "X": tensor_x,
+            "y": tensor_labels,
+            "train_labeled": train_labeled,
+            "training": tensor_training,
+        }
+
+        self.costs = {
+            "full": full_cost,
+            "class": class_cost,
+            "reconstruction": rec_cost,
+            "cw": log_cw_cost
+        }
+
+        self.train_ops = {
+            "full": train_op,
+        }
+
+        self.gausses = {
+            "means": means,
+            "variations": variances,
+            "probs": probs
+        }
+        self.out = {
+            "z": tensor_z,
+            "y": tensor_y,
+            "logits": class_logits,
+            "probs": class_probs
+        }
+        self.preds = class_probs
+
 # ======================================
 # ========== HELPER FUNCTIONS ==========
 # ======================================
@@ -1032,14 +1137,9 @@ def get_global_std(tensor_z, means, variances, probs, classes_num):
 def get_gaussians(z_dim, init, dataset, gauss_num):
     G = gauss_num
     with tf.variable_scope("gmm", reuse=False):
-        np.random.seed(25)
-        print(init, G, z_dim)
-        np.random.seed()
-
-
         one_hot = np.zeros([G, z_dim])
-        one_hot[np.arange(G), np.arange(G)] = 1
-        one_hot *= init
+        one_hot[np.arange(z_dim) % G, np.arange(z_dim)] = 1
+        one_hot *= init / z_dim * G
         one_hot += np.random.normal(0, .001, size=one_hot.shape)
         # TODO: means = tf.constant()
 
@@ -1070,12 +1170,17 @@ def get_gaussians(z_dim, init, dataset, gauss_num):
 
         labels_proportions = (
             dataset.labeled_train["y"].sum(0) / dataset.labeled_train["y"].sum())
-        # probs = tf.constant(labels_proportions, dtype=tf.float32)
-        probs = tf.constant([1 / G] * G, dtype=tf.float32)
+        probs = tf.constant(labels_proportions, dtype=tf.float32)
+        gaussians_per_class = gauss_num // len(labels_proportions)
+        probs = tf.tile(tf.expand_dims(probs, -1), (1, gaussians_per_class))
+        probs = tf.reshape(probs, (-1,))
+
+        # probs = tf.constant([1 / G] * G, dtype=tf.float32)
 
         # logits = tf.get_variable("logit_probs", [G])
         # probs = tf.nn.softmax(logits)
 
+    print("Shape of gaussians", means.shape, gauss_num)
     return means, variances, probs
 
 def get_empirical_gamma(tensor_z, means, variances, probs, classes_num):
@@ -1141,6 +1246,15 @@ def calculate_logits(tensor_z, means, alpha, p):
     class_logits = tf.log(p) - 0.5 * tf.log(2 * pi * alpha) + class_logits
     return class_logits
 
+# TODO: to nie dziala chyba. Poprawic.
+def calculate_multiple_logits(tensor_z, means, alpha, p, gaussians_per_class=1):
+    N = tf.cast(tf.shape(tensor_z)[0], tf.int32)
+    class_logits = -norm_squared(tf.expand_dims(tensor_z, 1) - tf.expand_dims(means, 0), axis=-1) / (2 * alpha)
+    class_logits = tf.log(p) - 0.5 * tf.log(2 * pi * alpha) + class_logits # [N, G * K]
+    class_logits = tf.reshape(class_logits, [N, -1, gaussians_per_class]) # [N, G, K]
+    class_logits = tf.reduce_sum(class_logits, -1) # [N, G]
+    return class_logits
+
 def calculate_single_class_probs(tensor_z, means, alpha, p):
     class_probs = -norm_squared(tf.expand_dims(tensor_z, 1) - tf.expand_dims(means, 0), axis=-1) / (2 * alpha)
     # class_probs *= tf.sqrt(2 * pi * alpha)
@@ -1163,7 +1277,7 @@ def calculate_probs_cost(
 
     print(class_probs.shape, tensor_target.shape)
     class_cost = tf.reduce_mean(
-        -tf.reduce_sum(tensor_target * tf.log(class_probs + 1e-5), reduction_indices=[1]))
+        -tf.reduce_sum(tensor_target * tf.log(tf.math.maximum(class_probs, 1e-15)), reduction_indices=[1]))
 
     class_cost = tf.where(
         tf.less(class_cost, eps),
@@ -1172,7 +1286,7 @@ def calculate_probs_cost(
     denominator = tf.reduce_sum(tensor_target)
     denominator = tf.cond(tf.equal(denominator, 0), lambda: tf.constant(1, tf.float32), lambda: denominator)
     # class_cost_fin = tf.reduce_mean(class_cost * non_zero_indices)
-    class_cost_fin = tf.reduce_sum(class_cost * labeled_mask) / denominator
+    class_cost_fin = tf.reduce_sum(class_cost * tf.cast(labeled_mask, tf.float32)) / denominator
     return class_cost_fin
 
 def calculate_logits_cost(

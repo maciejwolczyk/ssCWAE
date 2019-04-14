@@ -68,6 +68,7 @@ class Dataset:
             self.filtered = np.where(std > 0.1)
             self.train["X"] = self.train["X"][:, std > 0.1]
             self.test["X"] = self.test["X"][:, std > 0.1]
+            self.valid["X"] = self.valid["X"][:, std > 0.1]
             self.x_dim = len(self.train["X"][0])
             print("X DIM", self.x_dim)
 
@@ -129,11 +130,11 @@ class Dataset:
 
 
         labels = np.copy(self.train["y"])
-        print("Labels len", len(labels), "shape", labels.shape)
         labels_props = self.train["y"].sum(0) / self.train["y"].sum()
+        print("Labels len", len(labels), "shape", labels.shape, "Props", labels_props)
 
         # TODO: naprawić proporcje
-        # labels_props = np.array([0.1] * 10)
+        labels_props = np.array([0.1] * 10)
 
         if keep_labels_proportions:
             argmax_labels = labels.argmax(-1).squeeze()
@@ -287,16 +288,17 @@ def get_cifar():
 def get_celeba_images(examples_num):
 
     dataset_dir = "/mnt/users/mwolczyk/local/Repos/networks-do-networks/dataset/img_align_celeba/"
-    crop_size = [128, 128]
-    target_size = [64, 64]
     orig_size = [178, 218]
+    crop_size = [140, 140]
+    target_size = [64, 64]
 
     start_y = (orig_size[1] - crop_size[0]) // 2
     start_x = (orig_size[0] - crop_size[1]) // 2
 
     loaded_images = []
 
-    for idx, img_name in enumerate(tqdm(os.listdir(dataset_dir))):
+    images_list = sorted(os.listdir(dataset_dir))
+    for idx, img_name in enumerate(tqdm(images_list)):
         if examples_num is not None and idx >= examples_num:
             break
         img = Image.open(dataset_dir + img_name).convert("RGB")
@@ -336,6 +338,8 @@ def get_celeba_multitag():
 
     X = get_celeba_images(examples_num)
     Y = []
+
+    # k
     with open(dataset_dir + "/list_attr_celeba.txt") as f:
         f.readline() # Omitting header
         f.readline() # Omitting label list
@@ -382,6 +386,8 @@ def get_celeba_singletag():
     ]
     dataset_dir = "/mnt/users/mwolczyk/local/Repos/networks-do-networks/dataset/"
 
+    # chosen_attributes = ["Male", "Smiling"]
+    # TODO: uwazaj na kolejnosc
     chosen_attributes = ["Male", "Smiling"]
     chosen_indices = [idx for idx, label in enumerate(attr_labels)
                       if label in chosen_attributes]
@@ -389,6 +395,7 @@ def get_celeba_singletag():
     # TODO: to trzeba madrzej
     classes_num = 4
     labels_names = ["Not Male, Not Smiling", "Not Male, Smiling", "Male, Not Smiling", "Male and Smiling"]
+    # labels_names = ["Not smiling", "Smiling"]
 
     X = get_celeba_images(examples_num)
     Y = []

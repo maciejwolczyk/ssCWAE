@@ -89,7 +89,7 @@ class RectangleCoder():
 class CelebaCoder():
     def __init__(self, dataset,
             h_dim=256,
-            kernel_size=3,
+            kernel_size=4,
             kernel_num=32):
 
         self.h_dim = h_dim
@@ -111,16 +111,16 @@ class CelebaCoder():
 
             h = tfl.conv2d(
                     h, self.kernel_num, self.kernel_size,
-                    strides=1, padding="same")
-            h = tf.nn.relu(h)
-
-            h = tfl.conv2d(
-                    h, self.kernel_num, self.kernel_size,
                     strides=2, padding="same")
             h = tf.nn.relu(h)
 
             h = tfl.conv2d(
-                    h, self.kernel_num, self.kernel_size,
+                    h, self.kernel_num * 2, self.kernel_size,
+                    strides=2, padding="same")
+            h = tf.nn.relu(h)
+
+            h = tfl.conv2d(
+                    h, self.kernel_num * 2, self.kernel_size,
                     strides=2, padding="same")
             h = tf.nn.relu(h)
 
@@ -138,14 +138,15 @@ class CelebaCoder():
             h = z
             h = tfl.dense(h, units=self.h_dim, activation=tf.nn.relu)
             # h = tfl.dense(h, units=self.h_dim, activation=tf.nn.relu)
-            stride = 8
+            stride = 16
             h = tfl.dense(
-                    h, units=im_h // stride * im_w // stride * self.kernel_num,
+                    h, units=im_h // stride * im_w // stride * self.kernel_num * 2,
                     activation=tf.nn.relu)
-            h = tf.reshape(h, (-1, im_h // stride, im_w // stride, self.kernel_num))
+            h = tf.reshape(h, (-1, im_h // stride, im_w // stride, self.kernel_num * 2))
+
 
             h = tfl.conv2d_transpose(
-                    h, self.kernel_num, self.kernel_size,
+                    h, self.kernel_num * 2, self.kernel_size,
                     strides=2, padding="same", activation=tf.nn.relu)
 
             h = tfl.conv2d_transpose(
@@ -154,7 +155,7 @@ class CelebaCoder():
 
             h = tfl.conv2d_transpose(
                     h, self.kernel_num, self.kernel_size,
-                    strides=1, padding="same", activation=tf.nn.relu)
+                    strides=2, padding="same", activation=tf.nn.relu)
 
             h = tfl.conv2d_transpose(
                     h, im_c, self.kernel_size,
@@ -167,7 +168,7 @@ class CelebaCoder():
 class CifarCoder():
     def __init__(self, dataset,
             h_dim=256,
-            kernel_size=2,
+            kernel_size=3,
             kernel_num=32):
 
         self.h_dim = h_dim
@@ -192,19 +193,19 @@ class CifarCoder():
                     strides=2, padding="same")
             h = tf.nn.relu(h)
 
+            # TODO: tu troche zmienilem
             h = tfl.conv2d(
-                    h, self.kernel_num, self.kernel_size,
-                    strides=1, padding="same")
+                    h, self.kernel_num * 2, self.kernel_size,
+                    strides=2, padding="same")
             h = tf.nn.relu(h)
 
             h = tfl.conv2d(
-                    h, self.kernel_num, self.kernel_size,
-                    strides=1, padding="same")
+                    h, self.kernel_num * 2, self.kernel_size,
+                    strides=2, padding="same")
             h = tf.nn.relu(h)
 
             h = tfl.flatten(h)
             h = tfl.dense(h, units=self.h_dim, activation=tf.nn.relu)
-            # h = tfl.dense(h, units=self.h_dim, activation=tf.nn.relu)
             z_mean = tfl.dense(h, units=z_dim, name='z_mean')
             # z_mean = tfl.batch_normalization(z_mean, training=training)
             return z_mean
@@ -216,19 +217,19 @@ class CifarCoder():
             h = z
             h = tfl.dense(h, units=self.h_dim, activation=tf.nn.relu)
             # h = tfl.dense(h, units=self.h_dim, activation=tf.nn.relu)
-            stride = 2
+            stride = 8
             h = tfl.dense(
-                    h, units=im_h // stride * im_w // stride * self.kernel_num,
+                    h, units=im_h // stride * im_w // stride * self.kernel_num * 2,
                     activation=tf.nn.relu)
-            h = tf.reshape(h, (-1, im_h // stride, im_w // stride, self.kernel_num))
+            h = tf.reshape(h, (-1, im_h // stride, im_w // stride, self.kernel_num * 2))
+
+            h = tfl.conv2d_transpose(
+                    h, self.kernel_num * 2, self.kernel_size,
+                    strides=2, padding="same", activation=tf.nn.relu)
 
             h = tfl.conv2d_transpose(
                     h, self.kernel_num, self.kernel_size,
-                    strides=1, padding="same", activation=tf.nn.relu)
-
-            h = tfl.conv2d_transpose(
-                    h, self.kernel_num, self.kernel_size,
-                    strides=1, padding="same", activation=tf.nn.relu)
+                    strides=2, padding="same", activation=tf.nn.relu)
 
             h = tfl.conv2d_transpose(
                     h, self.kernel_num, self.kernel_size,

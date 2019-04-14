@@ -24,7 +24,7 @@ def draw_gmm(
 
     color_arr = ['blue', 'green', 'red', 'cyan', 'magenta', 'yellow', 'lime',
                  'purple', 'pink', 'brown', 'orange', 'teal', 'coral',
-                 'lightblue', 'black']
+                 'lightblue', 'black', ]
     color_arr = np.array(color_arr)
 
 
@@ -39,15 +39,23 @@ def draw_gmm(
     plt.scatter(labeled_z[:, 0], labeled_z[:, 1], c=c)
 
     if means is not None:
+        gaussians_per_class = len(means) // dataset.classes_num
         for i in range(len(means)):
-            c = color_arr[i]
+            c = color_arr[i // gaussians_per_class]
             circle = plt.Circle(
                     means[i], alpha[i],
                     color=c, fill=False, linewidth=p[i] * 30)
             ax.add_artist(circle)
-            plt.scatter(means[i, 0], means[i, 1],
-                    s=0 + (p[i] * alpha[i] * 1000),
-                    c=c, label=dataset.labels_names[i], marker="^")
+            if i % gaussians_per_class == 0:
+                plt.scatter(means[i, 0], means[i, 1],
+                        s=0 + (p[i] * alpha[i] * 1000),
+                        c=c, label=dataset.labels_names[i // gaussians_per_class],
+                        marker="^")
+            else:
+                plt.scatter(means[i, 0], means[i, 1],
+                        s=0 + (p[i] * alpha[i] * 1000),
+                        c=c, marker="^")
+
 
     plt.title(title)
     plt.legend()
@@ -140,6 +148,98 @@ def evaluate_cwae(
 
 
 
+def evaluate_multigmmcwae(
+        sess, model, valid_set, epoch, dataset,
+        filename_prefix="test", subset=None,
+        class_in_sum=True, training_mode=False):
+
+    means_val, alphas_val, p_val = sess.run(
+            [model.gausses["means"],
+             model.gausses["variations"],
+             model.gausses["probs"]])
+
+    metrics_tensors = {
+        "cramer-wold": model.costs["cw"],
+        "reconstruction": model.costs["reconstruction"],
+        "classification": model.costs["class"],
+        "full": model.costs["full"]
+    }
+
+    metrics_final = {k:[] for k in metrics_tensors.keys()}
+    metrics_final["accuracy"] = []
+
+    if subset != None:
+        valid_set = {"X": valid_set["X"][:subset],
+                     "y": valid_set["y"][:subset]}
+
+    batch_size = 500
+    batch_num = int(np.ceil(len(valid_set["X"]) / batch_size))
+    costs_arr = []
+    all_z = []
+    preds = []
+    for batch_idx in range(batch_num):
+        X_batch = valid_set["X"][batch_idx * batch_size:(batch_idx + 1) * batch_size]
+        y_batch = valid_set["y"][batch_idx * batch_size:(batch_idx + 1) * batch_size]
+
+        feed_dict = {
+                model.placeholders["X"]: X_batch,
+                model.placeholders["y"]: y_batch,
+                model.placeholders["training"]: training_mode}
+
+        metrics, class_logits, out_z = sess.run(
+                [metrics_tensors, model.preds, model.out["z"]],
+                feed_dict=feed_dict)
+
+        metrics["classification"] *= y_batch.sum()
+        pred = class_logits.argmax(-1)
+        preds += pred.tolist()
+
+        correct_n = np.sum((pred == y_batch.argmax(-1))
+                           * y_batch.sum(axis=-1))
+        # print(filename_prefix, "small acc", correct_n / batch_size)
+
+        metrics["accuracy"] = correct_n
+        all_z += [out_z]
+
+        for key, value in metrics.items():
+            metrics_final[key] += [value]
+
+    all_z = np.vstack(all_z)
+    emp_means = np.array([np.mean(all_z, axis=0)])
+    emp_variances = np.array([np.mean(np.var(all_z, axis=0))])
+
+    # PCA
+    try:
+        if epoch % 5 == 0:
+            if model.z_dim == 2: # If we're on a plane, PCA is not necessary
+                pca_results = all_z
+                pca_means = means_val
+            else:
+                pca = PCA(2)
+                pca_results = pca.fit_transform(all_z)
+                pca_means = pca.transform(means_val)
+
+            graph_filename = "results/{}/graphs/{}_epoch_{}.png".format(
+                    model.name, filename_prefix, str(epoch).zfill(3))
+            draw_gmm(pca_results, valid_set["y"], dataset,
+                     pca_means, alphas_val, p_val, lims=False,
+                     filename=graph_filename)
+    except ValueError as e:
+        print(e)
+
+    for key, value in metrics_final.items():
+        if key is "accuracy" or key is "classification":
+            metrics_final[key] = np.sum(value) / valid_set["y"].sum()
+        else:
+            metrics_final[key] = np.mean(value)
+
+    if epoch % 5 == 0:
+        print(epoch, "Dataset:", filename_prefix, end="\t")
+        for key in ["accuracy", "cramer-wold", "reconstruction", "full", "classification"]:
+            print("{}: {:.4f}".format(key, metrics_final[key]), end=" ")
+        print()
+
+    return metrics_final, emp_variances, emp_means
 
 def evaluate_gmmcwae(
         sess, model, valid_set, epoch, dataset,
@@ -287,6 +387,7 @@ def sample_from_classes(sess, model, dataset, epoch, valid_var=None, show_only=F
     means_val, alphas_val = sess.run(
             [model.gausses["means"], model.gausses["variations"]])
 
+    print("Means shape", means_val.shape)
     if means_val.shape[0] == 1:
         means_val = np.tile(means_val, (10, 1))
         alphas_val = np.tile(alphas_val, (10,))
@@ -299,7 +400,9 @@ def sample_from_classes(sess, model, dataset, epoch, valid_var=None, show_only=F
     else:
         print("Analytic variances", alphas_val)
 
-    canvas = np.empty((im_h * dataset.classes_num, im_w * 10, im_c))
+    canvas = np.empty((im_h * len(means_val), im_w * 10, im_c))
+
+
     dim = len(means_val[0])
     samples = np.random.multivariate_normal(
         [0.] * dim, np.eye(dim), size=10)
@@ -317,9 +420,9 @@ def sample_from_classes(sess, model, dataset, epoch, valid_var=None, show_only=F
                 }
             )
         else:
-            one_hot_class = [0.] * 10
-            one_hot_class[row_idx] = 1.
-            one_hot_class = [one_hot_class] * 10
+            # one_hot_class = [0.] * 10
+            # one_hot_class[row_idx] = 1.
+            # one_hot_class = [one_hot_class] * 10
             samples = np.random.multivariate_normal(mean, cov * np.eye(dim), size=10)
             generated = sess.run(model.out["y"], {
                 model.out["z"]: samples,
@@ -338,8 +441,9 @@ def sample_from_classes(sess, model, dataset, epoch, valid_var=None, show_only=F
             canvas[row_idx * im_h:(row_idx + 1) * im_h,
                    col_idx * im_w:(col_idx + 1) * im_w] = sample
 
-    plt.ylabel(
-            "\n".join(dataset.labels_names), fontsize=5, rotation=0.45)
+    # plt.ylabel(
+    #         "\n".join(dataset.labels_names), fontsize=5, rotation=0.45)
+    plt.xticks([])
     plt.yticks([])
 
     # fig.tight_layout(pad=0)
@@ -394,14 +498,61 @@ def save_samples(sess, model, dataset, n_samples):
 
 
 def inter_class_interpolation(sess, model, dataset, epoch, show_only=False):
-    pass
+    means_val, alphas_val, p_val = sess.run(
+            [model.gausses["means"],
+             model.gausses["variations"],
+             model.gausses["probs"]])
+
+    mean_diff_matrix = np.expand_dims(means_val, 0) - np.expand_dims(means_val, 1)
+    im_h, im_w, im_c = dataset.image_shape
+
+    samples_num = 10
+    interpolation_steps = 10
+    canvas = np.zeros((im_h * samples_num, im_w * (interpolation_steps + 2), im_c))
+
+    interpolating_samples = list(range(samples_num))
+    tensor_z = sess.run(
+        model.out["z"],
+        { model.placeholders["X"]: dataset.test["X"][interpolating_samples] }
+    )
+
+    for idx in interpolating_samples:
+        label = np.argmax(dataset.test["y"][idx])
+        interpolation_direction = (
+            mean_diff_matrix[label][(label + 1) % dataset.classes_num])
+
+        z_inputs = []
+        for step_size in np.linspace(0, 1.0, num=interpolation_steps + 2):
+            z_inputs += [tensor_z[idx] + interpolation_direction * step_size]
+
+        outputs = sess.run(model.out["y"], {model.out["z"]: z_inputs})
+
+        for output_idx, output in enumerate(outputs):
+            canvas[im_h * idx:im_h * (idx + 1),
+                   im_w * output_idx:im_w * (output_idx + 1)] = output.reshape(im_h, im_w, im_c)
+
+
+    fig = plt.figure(figsize=(interpolation_steps + 2, samples_num))
+
+    plt.xticks([])
+    plt.yticks([])
+    plt.axes().set_aspect('equal')
+    plt.axis("off")
+    plt.imshow(canvas, origin="upper", cmap="gray")
+    if show_only:
+        plt.show()
+    else:
+        filename = "results/{}/class_interpolation_{}.png".format(
+            model.name, str(epoch).zfill(3))
+        plt.savefig(filename, bbox_inches='tight', pad_inches=0)
+    plt.close(fig)
 
 
 def interpolation(sess, model, dataset, epoch, show_only=False):
-    out_z=[[1,2],[3,4],[5,6],[7,8],[9,10],[11,12],[13,14],[15,16],[15,17],[18,1]]
+    out_z=[[1,2],[3,4],[5,6],[7,8],[9,10],[11,12],[13,14],[15,16],[17,18],[19,1]]
     # TODO: przejrzyj to
 
-    n_iterations = 10
+    n_iterations = 8
     nx = n_iterations + 2
     ny = 10
 
@@ -460,8 +611,12 @@ def interpolation(sess, model, dataset, epoch, show_only=False):
             canvas[(ny - y_idx - 1) * im_h:(ny - y_idx) * im_h,
                    x_idx * im_w:(x_idx + 1) * im_w] = d_plot.reshape(im_h, im_w, im_c)
 
+
     canvas = canvas.squeeze() # (28, 28, 1) => (28, 28)
-    plt.figure(figsize=(nx, ny))
+    fig = plt.figure(figsize=(nx, ny))
+
+    plt.xticks([])
+    plt.yticks([])
     plt.axes().set_aspect('equal')
     plt.axis("off")
     plt.imshow(canvas, origin="upper", cmap="gray")
@@ -472,7 +627,7 @@ def interpolation(sess, model, dataset, epoch, show_only=False):
         filename = "results/{}/interpolation_{}.png".format(
             model.name, str(epoch).zfill(3))
         plt.savefig(filename, bbox_inches='tight', pad_inches=0)
-    plt.close()
+    plt.close(fig)
 
 
 def plot_costs(fig, costs, name):
@@ -487,9 +642,8 @@ def plot_costs(fig, costs, name):
 
     ax_1.clear()
     ax_2.clear()
-    ax_1.set_title(name)
 
-    for key in ["classification", "cramer-wold", "cpd", "reconstruction"]:
+    for key in ["classification", "cramer-wold", "reconstruction"]:
         if key in costs:
             ax_1.plot(costs[key], label=key)
 
@@ -498,6 +652,8 @@ def plot_costs(fig, costs, name):
             ax_2.set_ylim(0, 1)
             ax_2.plot(costs[key], label=key, c="red")
 
+    plt.title("Metrics")
+    ax_1.set_xlabel("Epoch")
     if first_time:
         fig.legend(loc=3)
     fig.canvas.draw()
@@ -512,7 +668,7 @@ def save_costs(model, costs, dataset_type):
     fig, _ = plt.subplots()
     plot_costs(fig, cost_dict, dataset_type)
     results_dir = "results/{}".format(model.name)
-    fig.savefig(results_dir + "/{}_losses.png".format(dataset_type))
+    fig.savefig(results_dir + "/{}_losses.png".format(dataset_type), dpi=300)
     plt.close(fig)
 
     costs_arr = list((key, val) for key, val in cost_dict.items())

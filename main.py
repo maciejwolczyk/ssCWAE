@@ -15,7 +15,6 @@ import baselines
 import cwae
 import data_loader
 import metrics
-import vae
 
 frugal_config = tf.ConfigProto(gpu_options=tf.GPUOptions(allow_growth=True))
 
@@ -108,17 +107,19 @@ def train_model(
     #         kernel_size=3,
     #         kernel_num=kernel_num)
 
-    coder = architecture.CelebaCoder(
-        dataset, kernel_num=kn, h_dim=h_dim)
-    # coder = architecture.FCCoder(
-    #     dataset, h_dim=h_dim, layers_num=kernel_num)
+    # coder = architecture.CelebaCoder(
+    #     dataset, kernel_num=kn, h_dim=h_dim)
+    coder = architecture.FCCoder(
+        dataset, h_dim=h_dim, layers_num=kernel_num)
+    # coder = architecture.CifarCoder(
+    #     dataset, kernel_num=kn, h_dim=h_dim)
     classifier_cls = architecture.DummyClassifier
 
 
     model_type = "gmmcwae"
     model_name = (
         "{}/{}/{}/{}d_erfw{}_kn{}_hd{}_bs{}_sw{}_dw{}_a{}_gw{}_init{}" +
-        "cw{}_lr{}_onehotinit_alpha_nobn_notexact_cw").format(
+        "cw{}_lr{}_noalpha_gpc2_logcost_500eps").format(
             dataset.name, coder.__class__.__name__, model_type,
             latent_dim, erf_weight, kernel_num, h_dim,
             batch_size, supervised_weight, distance_weight, erf_alpha,
@@ -127,7 +128,7 @@ def train_model(
     print(model_name)
     prepare_directories(model_name)
 
-    supervised_weight *= dataset.train_examples_num / labeled_examples_n
+    # supervised_weight *= dataset.train_examples_num / labeled_examples_n
     if model_type == "gmmcwae":
         model = cwae.GmmCwaeModel(
                 model_name, coder, dataset,
@@ -142,7 +143,12 @@ def train_model(
                 model_name, coder, dataset, learning_rate=lr,
                 latent_dim=latent_dim, gamma_weight=gamma,
                 cw_weight=cw_weight)
-
+    elif model_type == "multigmmcwae":
+        model = cwae.MultiGmmCwaeModel(
+                model_name, coder, dataset, learning_rate=lr,
+                z_dim=latent_dim, gamma_weight=gamma,
+                cw_weight=cw_weight, supervised_weight=supervised_weight,
+                init=init, gaussians_per_class=2)
     else:
         raise NotImplemented
 
@@ -150,7 +156,7 @@ def train_model(
 
 
 def run_training(model, dataset, batch_size):
-    n_epochs = 150
+    n_epochs = 500
     with tf.Session(config=frugal_config) as sess:
         sess.run(tf.global_variables_initializer())
 
@@ -167,7 +173,8 @@ def run_training(model, dataset, batch_size):
         costs = np.array(costs)
         train_costs, valid_costs, test_costs = costs[:, 0], costs[:, 1], costs[:, 2]
 
-        metrics.save_samples(sess, model, dataset, 10000)
+        if dataset.name != "mnist":
+            metrics.save_samples(sess, model, dataset, 10000)
         metrics.save_costs(model, train_costs, "train")
         metrics.save_costs(model, valid_costs, "valid")
         metrics.save_costs(model, test_costs, "test")
@@ -184,6 +191,9 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
             X_batch = apply_bernoulli_noise(X_batch)
         elif dataset.name == "svhn" and False:
             X_batch = apply_uniform_noise(X_batch)
+
+        if model.preprocessing_model:
+            X_batch = sess.run(model.m1.out["z"], {model.m1.placeholders["X"]: X_batch})
 
         feed_dict = feed_dict={
             model.placeholders["X"]: X_batch,
@@ -245,18 +255,35 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
             sess, model, dataset.test,
             epoch_n, dataset, filename_prefix="test",
             subset=None)
+    elif type(model).__name__ == "MultiGmmCwaeModel":
+        train_metrics, _, _ = metrics.evaluate_multigmmcwae(
+            sess, model, dataset.semi_labeled_train,
+            epoch_n, dataset, filename_prefix="train",
+            subset=3000, training_mode=False)
+        valid_metrics, valid_var, valid_mean = metrics.evaluate_multigmmcwae(
+            sess, model, dataset.valid,
+            epoch_n, dataset, filename_prefix="valid",
+            subset=None, class_in_sum=False)
+        test_metrics, _, _ = metrics.evaluate_multigmmcwae(
+            sess, model, dataset.test,
+            epoch_n, dataset, filename_prefix="test",
+            subset=None)
 
     if epoch_n % 50 == 0:
         save_path = model.saver.save(
-                sess, "weights/dataset_mnist_wae/epoch=%d.ckpt" % (epoch_n))
+                sess, "results/{}/epoch=%d.ckpt".format(model.name, epoch_n))
         print("Model saved in path: {}".format(save_path))
 
     if epoch_n % 5 == 0:
-        analytic_mean = sess.run(model.gausses["means"])
-        mean_diff = np.sqrt(np.sum(np.square(analytic_mean - valid_mean), axis=1))
-        print("Mean diff:", mean_diff)
+
+        print("Model name", type(model).__name__)
+        if type(model).__name__ != "MultiGmmCwaeModel":
+            analytic_mean = sess.run(model.gausses["means"])
+            mean_diff = np.sqrt(np.sum(np.square(analytic_mean - valid_mean), axis=1))
+            print("Mean diff:", mean_diff)
 
         metrics.interpolation(sess, model, dataset, epoch_n)
+        metrics.inter_class_interpolation(sess, model, dataset, epoch_n)
         # metrics.sample_from_classes(sess, model, dataset, epoch_n, valid_var)
         metrics.sample_from_classes(sess, model, dataset, epoch_n, valid_var=None)
 
@@ -266,11 +293,14 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
     return train_metrics, valid_metrics, test_metrics
 
 
+# TODO: check cw_logits (grouped)
+# TODO: A few Gaussians for each class (mnist? svhn?)
+# TODO: Non-spherical Gaussians
+# TODO: Współczynnik korelacji pomiędzy odległościami (SVHN), klasy od najbliższej do najdalszej
+# TODO: something is super wrong with multigmmcwae (samples very very weird)
 
-
-# TODO: unlabeled dataset
 if __name__ == "__main__":
-    dataset_name = "celeba_singletag"
+    dataset_name = "mnist"
 
     if dataset_name == "mnist":
         labeled_num = 100
@@ -279,21 +309,21 @@ if __name__ == "__main__":
     elif dataset_name == "cifar":
         labeled_num = 4000
     elif dataset_name == "celeba_multitag" or dataset_name == "celeba_singletag":
-        labeled_num = 10000
+        labeled_num = 1000
 
 
     if dataset_name == "svhn":
-        latent_dims = [64]
-        learning_rates = [1e-4]
+        latent_dims = [16, 32]
+        learning_rates = [5e-4]
         distance_weights = [0.]
-        supervised_weights = [1., 10.]
-        kernel_nums = [3, 5]
-        batch_sizes = [1000]
-        hidden_dims = [512]
+        cw_weights = [5.]
+        supervised_weights = [0.]
+        kernel_nums = [32]
+        batch_sizes = [512]
+        hidden_dims = [128]
         gammas = [1.]
 
-        # init nie ma wiekszego znaczenia chyba
-        inits = [1.]
+        inits = [10.]
         cc_eps = [0.0]
         # labeled_super_weights = [1.0]
         labeled_super_weights = [0.]
@@ -302,18 +332,18 @@ if __name__ == "__main__":
         alphas = [1e-3]
 
     elif dataset_name == "cifar":
-        latent_dims = [16, 32]
+        latent_dims = [16]
         learning_rates = [5e-4]
-        cw_weights = [1., 5.]
+        cw_weights = [5.]
         distance_weights = [0.]
-        supervised_weights = [0., 5.]
+        supervised_weights = [5.]
         kernel_nums = [64]
-        batch_sizes = [500]
-        hidden_dims = [256]
+        batch_sizes = [128]
+        hidden_dims = [512, 256]
         gammas = [1.]
 
         # im większy init tym gorszy FID
-        inits = [1.]
+        inits = [10.]
         cc_eps = [0.0]
         # labeled_super_weights = [1.0]
         labeled_super_weights = [0.]
@@ -322,18 +352,18 @@ if __name__ == "__main__":
         alphas = [1e-3]
 
     elif dataset_name == "celeba_multitag" or dataset_name == "celeba_singletag":
-        latent_dims = [64]
-        learning_rates = [5e-4]
+        latent_dims = [32]
+        learning_rates = [1e-3]
         cw_weights = [5.]
         distance_weights = [0.]
-        supervised_weights = [1., 5.]
-        kernel_nums = [32, 64]
-        batch_sizes = [100, 200]
-        hidden_dims = [256]
+        supervised_weights = [5.]
+        kernel_nums = [32, 40]
+        batch_sizes = [256]
+        hidden_dims = [256, 512]
         gammas = [1.]
 
         # im większy init tym gorszy FID
-        inits = [1.]
+        inits = [1., 10.]
         cc_eps = [0.0]
         # labeled_super_weights = [1.0]
         labeled_super_weights = [0.]
@@ -342,9 +372,9 @@ if __name__ == "__main__":
         alphas = [1e-3]
 
     elif dataset_name == "mnist":
-        latent_dims = [5]
+        latent_dims = [5, 10]
         distance_weights = [0.]
-        supervised_weights = [1.0]
+        supervised_weights = [0.0]
         kernel_nums = [4, 5, 6]
         # dla bs=200 tez spoko dziala
         batch_sizes = [100]
