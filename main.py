@@ -87,7 +87,7 @@ def train_model(
         dataset_name, latent_dim=300, batch_size=100,
         labeled_examples_n=100, h_dim=400, kernel_size=4,
         kernel_num=25, distance_weight=1.0, cw_weight=1.0,
-        supervised_weight = 1.0, rng_seed=11, init=1.0, gamma=1.0,
+        supervised_weight=1.0, rng_seed=11, init=1.0, gamma=1.0,
         erf_weight=1.0, erf_alpha=0.05, labeled_super_weight=2.0,
         learning_rate=1e-3):
 
@@ -113,13 +113,17 @@ def train_model(
         dataset, h_dim=h_dim, layers_num=kernel_num)
     # coder = architecture.CifarCoder(
     #     dataset, kernel_num=kn, h_dim=h_dim)
+
     classifier_cls = architecture.DummyClassifier
+    # coder = architecture.FCClassifierCoder(
+    #     dataset, h_dim=h_dim, layers_num=kernel_num)
+
 
 
     model_type = "gmmcwae"
     model_name = (
         "{}/{}/{}/{}d_erfw{}_kn{}_hd{}_bs{}_sw{}_dw{}_a{}_gw{}_init{}" +
-        "cw{}_lr{}_noalpha_gpc2_logcost_500eps").format(
+        "cw{}_lr{}_1000l_noalpha_noneqprob_nobn_cyclic_finaltest").format(
             dataset.name, coder.__class__.__name__, model_type,
             latent_dim, erf_weight, kernel_num, h_dim,
             batch_size, supervised_weight, distance_weight, erf_alpha,
@@ -129,10 +133,11 @@ def train_model(
     prepare_directories(model_name)
 
     # supervised_weight *= dataset.train_examples_num / labeled_examples_n
+    print("Alpha waga!!!", supervised_weight, dataset.train_examples_num / labeled_examples_n)
     if model_type == "gmmcwae":
         model = cwae.GmmCwaeModel(
                 model_name, coder, dataset,
-                latent_dim=latent_dim,
+                z_dim=latent_dim,
                 supervised_weight=supervised_weight,
                 distance_weight=distance_weight, cw_weight=cw_weight,
                 init=init, gamma_weight=gamma, classifier_cls=classifier_cls,
@@ -141,7 +146,7 @@ def train_model(
     elif model_type == "onecwae":
         model = cwae.CwaeModel(
                 model_name, coder, dataset, learning_rate=lr,
-                latent_dim=latent_dim, gamma_weight=gamma,
+                z_dim=latent_dim, gamma_weight=gamma,
                 cw_weight=cw_weight)
     elif model_type == "multigmmcwae":
         model = cwae.MultiGmmCwaeModel(
@@ -149,6 +154,12 @@ def train_model(
                 z_dim=latent_dim, gamma_weight=gamma,
                 cw_weight=cw_weight, supervised_weight=supervised_weight,
                 init=init, gaussians_per_class=2)
+    elif model_type == "deepgmm":
+        model = cwae.DeepGmmModel(
+                model_name, coder, dataset, m1=None,
+                z_dim=latent_dim, supervised_weight=supervised_weight,
+                learning_rate=lr, cw_weight=cw_weight,
+                init=init, gamma_weight=gamma)
     else:
         raise NotImplemented
 
@@ -156,7 +167,7 @@ def train_model(
 
 
 def run_training(model, dataset, batch_size):
-    n_epochs = 500
+    n_epochs = 400
     with tf.Session(config=frugal_config) as sess:
         sess.run(tf.global_variables_initializer())
 
@@ -173,7 +184,8 @@ def run_training(model, dataset, batch_size):
         costs = np.array(costs)
         train_costs, valid_costs, test_costs = costs[:, 0], costs[:, 1], costs[:, 2]
 
-        if dataset.name != "mnist":
+        # TODO:
+        if dataset.name != "mnist" and False:
             metrics.save_samples(sess, model, dataset, 10000)
         metrics.save_costs(model, train_costs, "train")
         metrics.save_costs(model, valid_costs, "valid")
@@ -192,7 +204,7 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
         elif dataset.name == "svhn" and False:
             X_batch = apply_uniform_noise(X_batch)
 
-        if model.preprocessing_model:
+        if model.m1:
             X_batch = sess.run(model.m1.out["z"], {model.m1.placeholders["X"]: X_batch})
 
         feed_dict = feed_dict={
@@ -203,6 +215,14 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
         feed_dict[model.placeholders["train_labeled"]] = False
 
         if type(model).__name__ == "GmmCwaeModel":
+
+            max_iters = batches_num * 150
+            current_iter = batches_num * epoch_n + batch_idx
+            progress = min(current_iter / max_iters, 1)
+
+            current_cw_weight = progress * model.cw_weight
+            # feed_dict[model.placeholders["cw_weight"]] = current_cw_weight
+
             if epoch_n < 50:
                 feed_dict[model.placeholders["erf_weight"]] = 0
                 feed_dict[model.placeholders["classifier_distance_weight"]] = 0
@@ -268,22 +288,36 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
             sess, model, dataset.test,
             epoch_n, dataset, filename_prefix="test",
             subset=None)
+    elif type(model).__name__ == "DeepGmmModel":
+        train_metrics, _, _ = metrics.evaluate_deepgmm(
+            sess, model, dataset.semi_labeled_train,
+            epoch_n, dataset, filename_prefix="train",
+            subset=3000, training_mode=False)
+        valid_metrics, valid_var, valid_mean = metrics.evaluate_deepgmm(
+            sess, model, dataset.valid,
+            epoch_n, dataset, filename_prefix="valid",
+            subset=None, class_in_sum=False)
+        test_metrics, _, _ = metrics.evaluate_deepgmm(
+            sess, model, dataset.test,
+            epoch_n, dataset, filename_prefix="test",
+            subset=None)
 
     if epoch_n % 50 == 0:
         save_path = model.saver.save(
-                sess, "results/{}/epoch=%d.ckpt".format(model.name, epoch_n))
+                sess, "results/{}/epoch={}.ckpt".format(model.name, epoch_n))
         print("Model saved in path: {}".format(save_path))
 
-    if epoch_n % 5 == 0:
-
+    if epoch_n % 10 == 0:
         print("Model name", type(model).__name__)
-        if type(model).__name__ != "MultiGmmCwaeModel":
+        if type(model).__name__ != "DeepGmmModel":
             analytic_mean = sess.run(model.gausses["means"])
             mean_diff = np.sqrt(np.sum(np.square(analytic_mean - valid_mean), axis=1))
             print("Mean diff:", mean_diff)
 
         metrics.interpolation(sess, model, dataset, epoch_n)
         metrics.inter_class_interpolation(sess, model, dataset, epoch_n)
+        metrics.cyclic_interpolation(sess, model, dataset, epoch_n)
+        metrics.cyclic_interpolation(sess, model, dataset, epoch_n, direct=True)
         # metrics.sample_from_classes(sess, model, dataset, epoch_n, valid_var)
         metrics.sample_from_classes(sess, model, dataset, epoch_n, valid_var=None)
 
@@ -299,13 +333,22 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
 # TODO: Współczynnik korelacji pomiędzy odległościami (SVHN), klasy od najbliższej do najdalszej
 # TODO: something is super wrong with multigmmcwae (samples very very weird)
 
+
+
+# TODO: cos jest zle
+# TODO: podaj dirichleta zamiast categorical?
+# TODO: inny koszt klasyfikacji? GMM likelihood, Bayes?
+# TODO: weight prior
 if __name__ == "__main__":
-    dataset_name = "mnist"
+    dataset_name = "svhn"
 
     if dataset_name == "mnist":
         labeled_num = 100
     elif dataset_name == "svhn":
         labeled_num = 1000
+        # labeled_num = 2000
+        # labeled_num = 5000
+        # labeled_num = 10000
     elif dataset_name == "cifar":
         labeled_num = 4000
     elif dataset_name == "celeba_multitag" or dataset_name == "celeba_singletag":
@@ -313,17 +356,17 @@ if __name__ == "__main__":
 
 
     if dataset_name == "svhn":
-        latent_dims = [16, 32]
-        learning_rates = [5e-4]
+        latent_dims = [16, 20]
+        learning_rates = [3e-4]
         distance_weights = [0.]
         cw_weights = [5.]
-        supervised_weights = [0.]
-        kernel_nums = [32]
-        batch_sizes = [512]
-        hidden_dims = [128]
+        supervised_weights = [10.]
+        kernel_nums = [5]
+        batch_sizes = [1000]
+        hidden_dims = [786]
         gammas = [1.]
 
-        inits = [10.]
+        inits = [2., 4.]
         cc_eps = [0.0]
         # labeled_super_weights = [1.0]
         labeled_super_weights = [0.]
@@ -332,7 +375,7 @@ if __name__ == "__main__":
         alphas = [1e-3]
 
     elif dataset_name == "cifar":
-        latent_dims = [16]
+        latent_dims = [16, 50]
         learning_rates = [5e-4]
         cw_weights = [5.]
         distance_weights = [0.]
@@ -374,8 +417,11 @@ if __name__ == "__main__":
     elif dataset_name == "mnist":
         latent_dims = [5, 10]
         distance_weights = [0.]
-        supervised_weights = [0.0]
+        supervised_weights = [0.1]
         kernel_nums = [4, 5, 6]
+
+        learning_rates = [1e-3]
+        cw_weights = [5.]
         # dla bs=200 tez spoko dziala
         batch_sizes = [100]
         hidden_dims = [100, 300, 500]

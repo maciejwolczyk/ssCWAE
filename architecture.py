@@ -1043,28 +1043,37 @@ class FCClassifierCoder():
         print("hidden dims", self.hidden_dims)
 
     def encode(self, x, y, z_dim, training=False):
-        hd = self.hidden_dims[0]
-        x = tf.concat([x, y], 1)
-        h = tf.nn.relu(tfl.dense(x, units=hd))
-        for hd in self.hidden_dims[1:]:
-            h = tfl.dense(h, units=hd, activation=tf.nn.relu)
-            # h = tfl.batch_normalization(h, training=training)
-        z_mean = tfl.dense(h, units=z_dim, name='z_mean')
-        return z_mean
+        with tf.variable_scope("encoder", reuse=tf.AUTO_REUSE):
+            hd = self.hidden_dims[0]
+            # TODO: to vs dodwanie
+            x = tf.concat([x, y], 1)
+            h = tf.nn.relu(tfl.dense(x, units=hd))
+            for hd in self.hidden_dims[1:]:
+                h = tfl.dense(h, units=hd, activation=tf.nn.relu)
+                # h = tfl.batch_normalization(h, training=training)
+            z_mean = tfl.dense(h, units=z_dim, name='z_mean')
+            self.encoder_output = z_mean
+            return z_mean
 
     def decode(self, z, y, x_dim, training=False):
-        h = tf.concat([z, y], 1)
-        for hd in reversed(self.hidden_dims):
-            h = tfl.dense(h, units=hd, activation=tf.nn.relu)
-        y_mean = tfl.dense(h, units=x_dim, name='y_mean', activation=None)
-        return y_mean
+        with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
+            h = tf.concat([z, y], 1)
+            for hd in reversed(self.hidden_dims):
+                h = tfl.dense(h, units=hd, activation=tf.nn.relu)
+            y_mean = tfl.dense(h, units=x_dim, name='y_mean', activation=tf.nn.sigmoid)
+            self.decoder_output = y_mean
+            return y_mean
 
 class FCCoder():
     def __init__(self, dataset, h_dim=300, layers_num=2):
         self.h_dim = h_dim
         self.image_shape = dataset.image_shape
         self.hidden_dims = [h_dim] * layers_num
-        self.output_activation_fn = None if dataset.name == "svhn" else None
+        
+        if dataset.name == "svhn" and dataset.whitened:
+            self.output_activation_fn = None
+        else:
+            self.output_activation_fn = tf.nn.sigmoid
         # self.hidden_dims[-1] = self.hidden_dims[-1] // 2
 
     def encode(self, x, z_dim, training=False):

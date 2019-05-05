@@ -80,7 +80,7 @@ def evaluate_cwae(
         "cramer-wold": model.costs["cw"],
         "reconstruction": model.costs["reconstruction"],
         "cpd": model.costs["cpd"],
-        "full": model.costs["full"]
+        "full": model.costs["full"],
     }
 
     metrics_final = {k:[] for k in metrics_tensors.keys()}
@@ -140,7 +140,7 @@ def evaluate_cwae(
 
     if epoch % 5 == 0:
         print(epoch, "Dataset:", filename_prefix, end="\t")
-        for key in ["cramer-wold", "cpd", "reconstruction", "full"]:
+        for key in ["cramer-wold", "cpd", "reconstruction", "entropy", "full"]:
             print("{}: {:.4f}".format(key, metrics_final[key]), end=" ")
         print()
 
@@ -241,6 +241,96 @@ def evaluate_multigmmcwae(
 
     return metrics_final, emp_variances, emp_means
 
+def evaluate_deepgmm(
+        sess, model, valid_set, epoch, dataset,
+        filename_prefix="test", subset=None,
+        class_in_sum=True, training_mode=False):
+
+    means_val, alphas_val, p_val = sess.run(
+            [model.gausses["means"],
+             model.gausses["variations"],
+             model.gausses["probs"]])
+
+
+    metrics_tensors = {
+        "cramer-wold": model.costs["cw"],
+        "reconstruction": model.costs["reconstruction"],
+        "classification": model.costs["class"],
+        "distance": model.costs["distance"],
+        "sum": model.costs["full"]
+    }
+
+
+    metrics_final = {k:[] for k in metrics_tensors.keys()}
+    metrics_final["accuracy"] = []
+
+    if subset != None:
+        valid_set = {"X": valid_set["X"][:subset],
+                     "y": valid_set["y"][:subset]}
+
+    # for idx in range(50):
+    #     label = np.argmax(valid_set["y"][idx])
+    #     graph_filename = "results/{}/{}_{}_{}.png".format(
+    #             model.name, filename_prefix, idx, label)
+    #     print(graph_filename)
+    #     plt.imshow(valid_set["X"][idx].reshape(32, 32, 3))
+    #     plt.savefig(graph_filename)
+
+    batch_size = 500
+    batch_num = int(np.ceil(len(valid_set["X"]) / batch_size))
+    costs_arr = []
+    all_z = []
+    preds = []
+    for batch_idx in range(batch_num):
+        X_batch = valid_set["X"][batch_idx * batch_size:(batch_idx + 1) * batch_size]
+        y_batch = valid_set["y"][batch_idx * batch_size:(batch_idx + 1) * batch_size]
+
+        feed_dict = {
+                model.placeholders["X"]: X_batch,
+                model.placeholders["y"]: y_batch,
+                model.placeholders["training"]: training_mode}
+
+        metrics, class_logits = sess.run(
+                [metrics_tensors, model.preds],
+                feed_dict=feed_dict)
+
+        metrics["classification"] *= y_batch.sum()
+        pred = class_logits.argmax(-1)
+        preds += pred.tolist()
+
+        correct_n = np.sum((pred == y_batch.argmax(-1))
+                           * y_batch.sum(axis=-1))
+        # print(filename_prefix, "small acc", correct_n / batch_size)
+
+        metrics["accuracy"] = correct_n
+
+        for key, value in metrics.items():
+            metrics_final[key] += [value]
+
+
+    emp_means = np.array([0] * 10)
+    emp_variances = np.array([1] * 10)
+
+    rand_score = adjusted_rand_score(preds, valid_set["y"].argmax(-1))
+    metrics_final["rand_score"] = rand_score
+
+    for key, value in metrics_final.items():
+        if key is "accuracy" or key is "classification":
+            metrics_final[key] = np.sum(value) / valid_set["y"].sum()
+        else:
+            metrics_final[key] = np.mean(value)
+
+
+    if epoch % 5 == 0:
+        print(epoch, "Dataset:", filename_prefix, end="\t")
+        for key in ["accuracy", "cramer-wold", "reconstruction", "distance", "classification"]:
+            print("{}: {:.4f}".format(key, metrics_final[key]), end=" ")
+        print()
+
+    return metrics_final, emp_variances, emp_means
+
+
+
 def evaluate_gmmcwae(
         sess, model, valid_set, epoch, dataset,
         filename_prefix="test", subset=None,
@@ -262,6 +352,7 @@ def evaluate_gmmcwae(
         "erf": model.costs["erf"],
         "gmm": model.costs["gmm"],
         "norm": model.costs["norm"],
+        "entropy": model.costs["entropy"],
         "sum": cost_sum
     }
 
@@ -362,7 +453,7 @@ def evaluate_gmmcwae(
 
     if epoch % 5 == 0:
         print(epoch, "Dataset:", filename_prefix, end="\t")
-        for key in ["accuracy", "cramer-wold", "reconstruction", "distance", "classification"]:
+        for key in ["accuracy", "cramer-wold", "reconstruction", "distance", "classification", "entropy"]:
             print("{}: {:.4f}".format(key, metrics_final[key]), end=" ")
         print()
 
@@ -410,7 +501,26 @@ def sample_from_classes(sess, model, dataset, epoch, valid_var=None, show_only=F
 
         # TODO: jak samplujemy? zapytac Marka najlepiej
         classifier_sample = False
-        if classifier_sample:
+        if type(model).__name__ == "DeepGmmModel":
+            one_hot_class = [0.] * 10
+            one_hot_class[row_idx] = 1.
+            one_hot_class = [one_hot_class] * 10
+
+            samples = []
+            for idx in range(10):
+                gauss_idx = np.random.choice(len(means_val))
+                mean = means_val[gauss_idx]
+                cov = alphas_val[gauss_idx]
+                samples += [np.random.multivariate_normal(mean, cov * np.eye(dim), size=1)]
+            samples = np.concatenate(samples, 0)
+
+            generated = sess.run(model.out["y"], {
+                model.out["z"]: samples,
+                model.placeholders["y"]: one_hot_class
+                }
+            )
+
+        elif classifier_sample:
             one_hot_class = [0.] * 10
             one_hot_class[row_idx] = 1.
             generated = sess.run(model.out["y"],
@@ -547,6 +657,82 @@ def inter_class_interpolation(sess, model, dataset, epoch, show_only=False):
         plt.savefig(filename, bbox_inches='tight', pad_inches=0)
     plt.close(fig)
 
+def cyclic_interpolation(sess, model, dataset, epoch, show_only=False, direct=False):
+    means_val, alphas_val, p_val = sess.run(
+            [model.gausses["means"],
+             model.gausses["variations"],
+             model.gausses["probs"]])
+
+    mean_diff_matrix = np.expand_dims(means_val, 0) - np.expand_dims(means_val, 1)
+    im_h, im_w, im_c = dataset.image_shape
+
+    samples_num = 10
+    interpolation_steps = 10
+    padding = 6
+
+    interpolating_samples = list(range(samples_num))
+    tensor_z, probs = sess.run(
+        [model.out["z"], model.out["probs"]],
+        { model.placeholders["X"]: dataset.test["X"][interpolating_samples] }
+    )
+
+
+    for idx in interpolating_samples:
+        fig = plt.figure(figsize=(interpolation_steps, samples_num))
+
+        label = np.argmax(dataset.test["y"][idx])
+        canvas = np.ones(((im_h + padding) * (dataset.classes_num), im_w * interpolation_steps, im_c))
+
+        for direction in range(dataset.classes_num):
+
+            if direct:
+                interpolation_direction = means_val[direction] - tensor_z[idx]
+            else:
+                interpolation_direction = mean_diff_matrix[label][direction]
+
+            z_inputs = []
+            for step_size in np.linspace(0., 1., num=interpolation_steps):
+                z_inputs += [tensor_z[idx] + interpolation_direction * step_size]
+
+            outputs, sample_probs = sess.run(
+                [model.out["y"], model.out["probs"]],
+                {model.out["z"]: z_inputs}
+            )
+
+            for output_idx, output in enumerate(outputs):
+                start_h = (im_h + padding) * direction
+                caption = "l{} {}%".format(
+                    dataset.labels_names[sample_probs[output_idx].argmax()],
+                    round(float(sample_probs[output_idx].max() * 100), 2))
+                plt.text(im_w * output_idx, start_h - 2, caption, fontsize=6)
+
+                canvas[start_h:start_h + im_h,
+                       im_w * output_idx:im_w * (output_idx + 1)] = output.reshape(im_h, im_w, im_c)
+        
+
+
+        plt.xticks([])
+        plt.yticks([])
+        plt.axes().set_aspect('equal')
+        plt.axis("off")
+        plt.imshow(canvas, origin="upper", cmap="gray")
+
+        real_label = dataset.labels_names[label]
+        pred_label = dataset.labels_names[probs[idx].argmax()]
+
+        caption = "Label: {}    Class given by the model: {} with prob {}".format(
+            real_label, pred_label, round(float(probs[idx].max()), 2))
+        plt.text(0, 0, caption)
+
+        if show_only:
+            plt.show()
+        else:
+            inter_type = "direct" if direct else "cyclic"
+            filename = "results/{}/{}_interpolation_{}_{}.png".format(
+                model.name, inter_type, str(epoch).zfill(3), idx)
+            plt.savefig(filename, bbox_inches='tight', pad_inches=0)
+        plt.close(fig)
+
 
 def interpolation(sess, model, dataset, epoch, show_only=False):
     out_z=[[1,2],[3,4],[5,6],[7,8],[9,10],[11,12],[13,14],[15,16],[17,18],[19,1]]
@@ -643,7 +829,7 @@ def plot_costs(fig, costs, name):
     ax_1.clear()
     ax_2.clear()
 
-    for key in ["classification", "cramer-wold", "reconstruction"]:
+    for key in ["classification", "cramer-wold", "reconstruction", "entropy"]:
         if key in costs:
             ax_1.plot(costs[key], label=key)
 

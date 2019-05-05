@@ -76,6 +76,9 @@ class Dataset:
             reshaped_train = self.train["X"].reshape([-1] + self.image_shape)
             reshaped_test = self.test["X"].reshape([-1] + self.image_shape)
 
+            reshaped_train += np.random.uniform(0, 1. / 255., size=reshaped_train.shape)
+            reshaped_test += np.random.uniform(0, 1. / 255., size=reshaped_test.shape)
+
             print(reshaped_train.shape)
             self.std = reshaped_train.std(axis=(0, 1, 2))
             print("STD", self.std)
@@ -84,6 +87,8 @@ class Dataset:
 
             self.train["X"] = reshaped_train.reshape(self.train["X"].shape)
             self.test["X"] = reshaped_test.reshape(self.test["X"].shape)
+        else:
+            raise NotImplemented
 
     def blackening(self, X):
         if self.name == "mnist":
@@ -134,7 +139,7 @@ class Dataset:
         print("Labels len", len(labels), "shape", labels.shape, "Props", labels_props)
 
         # TODO: naprawić proporcje
-        labels_props = np.array([0.1] * 10)
+        # labels_props = np.array([0.1] * 10)
 
         if keep_labels_proportions:
             argmax_labels = labels.argmax(-1).squeeze()
