@@ -637,7 +637,12 @@ class GmmCwaeModel():
         cpd_cost = gmm_conditionally_positive_distance(unsupervised_tensor_z, means, z_dim)
         # log_cw_cost = cpd_cost
 
-        rec_cost = norm_squared(tensor_x - tensor_y, axis=-1)
+        if dataset.name == "mnist":
+            rec_cost = tensor_x * tf.log(tensor_y + 1e-8) + (1 - tensor_x) * tf.log(1 - tensor_y + 1e-8)
+            rec_cost = -tf.reduce_sum(rec_cost, axis=-1)
+        else:
+            rec_cost = norm_squared(tensor_x - tensor_y, axis=-1)
+
         log_rec_cost = tf.cond(
             train_labeled,
             lambda: tf.reduce_mean(tf.log(rec_cost)),
@@ -683,9 +688,6 @@ class GmmCwaeModel():
                 z_dim, means, variances, probs, dataset.classes_num)
         entropy_cost = calculate_logits_entropy(class_logits, labeled_mask)
 
-
-        # self.prepare_costs(
-        #     rec_cost, log_cw_cost, distance_cost, cec_cost):
 
         unsupervised_cost = tf.reduce_mean(
                 rec_cost
@@ -754,9 +756,7 @@ class GmmCwaeModel():
         with tf.control_dependencies(update_ops):
             # Prepare various train ops
             grads, gvars = zip(*optimizer.compute_gradients(full_cost))
-            print(grads)
             grads, _ = tf.clip_by_global_norm(grads, 5.0)
-            print(grads)
             capped_gvs = [(tf.clip_by_value(grad, -1., 1.), var) for grad, var in zip(grads, gvars)]
             train_op = optimizer.apply_gradients(capped_gvs)
 

@@ -180,3 +180,11 @@ EKSPERYMENT: cpd vs cw na gmm
 EKSPERYMENT: batch_norm trainable=False
 
 OBSERWACJA: batch_norm w latent space bardzo niestabilny. Przetstować na większym modelu (np. 64d)
+
+
+
+
+TODO:
+zastanowić się jakie eksperymenty do pracy (sample, accuracy, interpolacja i class_interpolation)
+Porównanie z pozostałymi metodami
+Iść w stronę średniej Gaussów

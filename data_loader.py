@@ -181,6 +181,7 @@ class Dataset:
         remain_indices = labels.sum(1).astype(bool)
         removed_indices = np.logical_not(remain_indices)
         print("Indices", remain_indices, removed_indices)
+        print("Indices lens", len(remain_indices), len(removed_indices))
 
         if keep_labels_proportions:
             # Get remain indices per class
@@ -302,6 +303,10 @@ def get_celeba_images(examples_num):
 
     loaded_images = []
 
+    train = []
+    valid = []
+    test = []
+
     images_list = sorted(os.listdir(dataset_dir))
     for idx, img_name in enumerate(tqdm(images_list)):
         if examples_num is not None and idx >= examples_num:
@@ -314,9 +319,14 @@ def get_celeba_images(examples_num):
             start_y + crop_size[1]
         ))
         img = np.array(img.resize(target_size, Image.BILINEAR)) / 255
-        loaded_images += [img]
+        if idx < 162770:
+            train += [img]
+        elif idx < 182637:
+            valid += [img]
+        else:
+            test += [img]
 
-    return np.array(loaded_images)
+    return np.array(train), np.array(valid), np.array(test)
 
 
 # TODO: singletag
@@ -341,8 +351,11 @@ def get_celeba_multitag():
                       if label in chosen_attributes]
 
 
-    X = get_celeba_images(examples_num)
-    Y = []
+    train_x, valid_x, test_x = get_celeba_images(examples_num)
+
+    train_y = []
+    valid_y = []
+    test_y = []
 
     # k
     with open(dataset_dir + "/list_attr_celeba.txt") as f:
@@ -364,15 +377,22 @@ def get_celeba_multitag():
                     pass
                 else:
                     raise ValueError("Ani jeden ani minus jeden: {}".format(label))
-            Y += [one_hot_label]
-    Y = np.array(Y)
+            if idx < 162770:
+                train_y += [one_hot_label]
+            elif idx < 182637:
+                valid_y += [one_hot_label]
+            else:
+                test_y += [one_hot_label]
+
+    train_y = np.array(train_y)
+    valid_y = np.array(valid_y)
+    test_y = np.array(test_y)
 
     # If the example has no representation, pick
     Y[Y.sum(1) == 0, -1] = 1
     print("Ratio of labels:", Y.sum(axis=0) / Y.shape[0])
     print("Nonzero count", np.count_nonzero(Y.sum(1)))
 
-    train_x, test_x, train_y, test_y = train_test_split(X, Y, test_size=0.1)
     return (train_x, train_y), (test_x, test_y), chosen_attributes + ["None"], "celeba_multitag"
 
 def get_celeba_singletag():
@@ -399,16 +419,18 @@ def get_celeba_singletag():
 
     # TODO: to trzeba madrzej
     classes_num = 4
-    labels_names = ["Not Male, Not Smiling", "Not Male, Smiling", "Male, Not Smiling", "Male and Smiling"]
+    labels_names = ["F/NS", "F/S", "M/NS", "M/S"]
     # labels_names = ["Not smiling", "Smiling"]
 
-    X = get_celeba_images(examples_num)
-    Y = []
+
+    train_y = []
+    valid_y = []
+    test_y = []
     with open(dataset_dir + "/list_attr_celeba.txt") as f:
         f.readline() # Omitting header
         f.readline() # Omitting label list
-        for idx, line in enumerate(f):
-            if examples_num is not None and idx >= examples_num:
+        for line_idx, line in enumerate(f):
+            if examples_num is not None and line_idx >= examples_num:
                 break
 
             labels = line.split()[1:]  # skip filename in the first column
@@ -424,15 +446,27 @@ def get_celeba_singletag():
                 else:
                     raise ValueError("Ani jeden ani minus jeden: {}".format(label))
 
-            Y += [label_val]
-    Y = np.array(Y)
+            one_hot_label = [0] * classes_num
+            one_hot_label[label_val] = 1
+
+            if line_idx < 162770:
+                train_y += [one_hot_label]
+            elif line_idx < 182637:
+                valid_y += [one_hot_label]
+            else:
+                test_y += [one_hot_label]
+
+    train_y = np.array(train_y)
+    valid_y = np.array(valid_y)
+    test_y = np.array(test_y)
+
+    train_x, valid_x, test_x = get_celeba_images(examples_num)
 
     # If the example has no representation, pick
     # Y[Y.sum(1) == 0, -1] = 1
     # print("Ratio of labels:", Y.sum(axis=0) / Y.shape[0])
     # print("Nonzero count", np.count_nonzero(Y.sum(1)))
 
-    train_x, test_x, train_y, test_y = train_test_split(X, Y, test_size=0.1)
     return (train_x, train_y), (test_x, test_y), labels_names, "celeba_singletag"
 
 def get_celeba_smiles():

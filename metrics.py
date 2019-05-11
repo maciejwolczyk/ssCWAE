@@ -638,6 +638,9 @@ def inter_class_interpolation(sess, model, dataset, epoch, show_only=False):
         outputs = sess.run(model.out["y"], {model.out["z"]: z_inputs})
 
         for output_idx, output in enumerate(outputs):
+            if dataset.whitened:
+                output = dataset.blackening(output)
+
             canvas[im_h * idx:im_h * (idx + 1),
                    im_w * output_idx:im_w * (output_idx + 1)] = output.reshape(im_h, im_w, im_c)
 
@@ -648,7 +651,7 @@ def inter_class_interpolation(sess, model, dataset, epoch, show_only=False):
     plt.yticks([])
     plt.axes().set_aspect('equal')
     plt.axis("off")
-    plt.imshow(canvas, origin="upper", cmap="gray")
+    plt.imshow(canvas.squeeze(), origin="upper", cmap="gray")
     if show_only:
         plt.show()
     else:
@@ -700,8 +703,10 @@ def cyclic_interpolation(sess, model, dataset, epoch, show_only=False, direct=Fa
             )
 
             for output_idx, output in enumerate(outputs):
+                if dataset.whitened:
+                    output = dataset.blackening(output)
                 start_h = (im_h + padding) * direction
-                caption = "l{} {}%".format(
+                caption = "{} {}%".format(
                     dataset.labels_names[sample_probs[output_idx].argmax()],
                     round(float(sample_probs[output_idx].max() * 100), 2))
                 plt.text(im_w * output_idx, start_h - 2, caption, fontsize=6)
@@ -715,14 +720,14 @@ def cyclic_interpolation(sess, model, dataset, epoch, show_only=False, direct=Fa
         plt.yticks([])
         plt.axes().set_aspect('equal')
         plt.axis("off")
-        plt.imshow(canvas, origin="upper", cmap="gray")
+        plt.imshow(canvas.squeeze(), origin="upper", cmap="gray")
 
         real_label = dataset.labels_names[label]
         pred_label = dataset.labels_names[probs[idx].argmax()]
 
-        caption = "Label: {}    Class given by the model: {} with prob {}".format(
-            real_label, pred_label, round(float(probs[idx].max()), 2))
-        plt.text(0, 0, caption)
+        # caption = "Label: {}    Class given by the model: {} with prob {}".format(
+        #     real_label, pred_label, round(float(probs[idx].max()), 2))
+        # plt.text(0, 0, caption)
 
         if show_only:
             plt.show()

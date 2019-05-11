@@ -107,10 +107,10 @@ def train_model(
     #         kernel_size=3,
     #         kernel_num=kernel_num)
 
-    # coder = architecture.CelebaCoder(
-    #     dataset, kernel_num=kn, h_dim=h_dim)
-    coder = architecture.FCCoder(
-        dataset, h_dim=h_dim, layers_num=kernel_num)
+    coder = architecture.CelebaCoder(
+        dataset, kernel_num=kn, h_dim=h_dim)
+    # coder = architecture.FCCoder(
+    #     dataset, h_dim=h_dim, layers_num=kernel_num)
     # coder = architecture.CifarCoder(
     #     dataset, kernel_num=kn, h_dim=h_dim)
 
@@ -123,7 +123,7 @@ def train_model(
     model_type = "gmmcwae"
     model_name = (
         "{}/{}/{}/{}d_erfw{}_kn{}_hd{}_bs{}_sw{}_dw{}_a{}_gw{}_init{}" +
-        "cw{}_lr{}_1000l_noalpha_noneqprob_nobn_cyclic_finaltest").format(
+        "cw{}_lr{}_100l_noalpha_noneqprob_nobn_cyclic_nowhiten_rep_1000e_dataset").format(
             dataset.name, coder.__class__.__name__, model_type,
             latent_dim, erf_weight, kernel_num, h_dim,
             batch_size, supervised_weight, distance_weight, erf_alpha,
@@ -167,7 +167,7 @@ def train_model(
 
 
 def run_training(model, dataset, batch_size):
-    n_epochs = 400
+    n_epochs = 500
     with tf.Session(config=frugal_config) as sess:
         sess.run(tf.global_variables_initializer())
 
@@ -191,6 +191,7 @@ def run_training(model, dataset, batch_size):
         metrics.save_costs(model, valid_costs, "valid")
         metrics.save_costs(model, test_costs, "test")
 
+
 def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
     # batches_num = int(np.ceil(len(dataset.train["X"]) / batch_size))
     batches_num = len(dataset.unlabeled_train["X"]) // batch_size
@@ -199,7 +200,7 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
 
     for batch_idx in trange(batches_num, leave=False):
         X_batch, y_batch = get_batch(batch_idx, batch_size, dataset)
-        if dataset.name == "mnist":
+        if dataset.name == "mnist" and dataset.whitened:
             X_batch = apply_bernoulli_noise(X_batch)
         elif dataset.name == "svhn" and False:
             X_batch = apply_uniform_noise(X_batch)
@@ -302,7 +303,7 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
             epoch_n, dataset, filename_prefix="test",
             subset=None)
 
-    if epoch_n % 50 == 0:
+    if epoch_n % 100 == 0:
         save_path = model.saver.save(
                 sess, "results/{}/epoch={}.ckpt".format(model.name, epoch_n))
         print("Model saved in path: {}".format(save_path))
@@ -327,20 +328,87 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
     return train_metrics, valid_metrics, test_metrics
 
 
-# TODO: check cw_logits (grouped)
-# TODO: A few Gaussians for each class (mnist? svhn?)
-# TODO: Non-spherical Gaussians
-# TODO: Współczynnik korelacji pomiędzy odległościami (SVHN), klasy od najbliższej do najdalszej
-# TODO: something is super wrong with multigmmcwae (samples very very weird)
+def load_and_test():
+    weights_filename = "32d_erfw0.0_kn32_hd256_bs256_sw5.0_dw0.0_a0.001_gw1.0_init1.0cw5.0_lr0.0005_100l_noalpha_noneqprob_nobn_cyclic_nowhiten_rep_1000e_dataset"
+    epoch_n = 500
+    dataset_name = "celeba_singletag"
+
+
+    if dataset_name == "mnist":
+        labeled_examples_num = 100
+        model_name = "mnist_reload"
+        latent_dim = 10
+        supervised_weight = 1.
+        kernel_num = 2
+        learning_rate = 3e-4
+        cw_weight = 5.
+        batch_size = 100
+        h_dim = 786
+        init = 1.
+
+    elif dataset_name == "svhn":
+        model_name = "svhn_reload"
+        labeled_examples_num = 1000
+        latent_dim = 20
+        learning_rate = 3e-4
+        cw_weight = 5.
+        supervised_weight = 10.
+        kernel_num = 5
+        batch_size = 1000
+        h_dim = 786
+        init = 2.
+
+    elif dataset_name == "celeba_multitag" or dataset_name == "celeba_singletag":
+        model_name = "celeba_reload"
+        labeled_examples_num = 1000
+        latent_dim = 32
+        learning_rate = 5e-4
+        cw_weight = 5.
+        supervised_weight = 5.
+        kernel_num = 32
+        batch_size = 256
+        h_dim = 256
+        init = 1.
+
+    prepare_directories(model_name)
+    dataset = data_loader.get_dataset_by_name(dataset_name, rng_seed=23)
+    dataset.remove_labels_fraction(
+        number_to_keep=labeled_examples_num,
+        keep_labels_proportions=True, batch_size=100)
+
+    
+    coder = architecture.CelebaCoder(
+        dataset, kernel_num=kernel_num, h_dim=h_dim)
+    # coder = architecture.FCCoder(
+    #     dataset, h_dim=h_dim, layers_num=kernel_num)
+
+    classifier_cls = architecture.DummyClassifier
+
+    model = cwae.GmmCwaeModel(
+            model_name, coder, dataset,
+            z_dim=latent_dim,
+            supervised_weight=supervised_weight,
+            distance_weight=0., cw_weight=cw_weight,
+            init=init, gamma_weight=1., classifier_cls=classifier_cls,
+            erf_weight=0., erf_alpha=0.01,
+            labeled_super_weight=0., learning_rate=learning_rate)
+
+    weights_path = "results/{}/{}/gmmcwae/{}/epoch={}.ckpt".format(
+            dataset.name, coder.__class__.__name__, weights_filename, epoch_n) 
+    
+    with tf.Session(config=frugal_config) as sess:
+        sess.run(tf.global_variables_initializer())
+        model.saver.restore(sess, weights_path)
+        metrics.interpolation(sess, model, dataset, "")
+        # metrics.inter_class_interpolation(sess, model, dataset, "")
+        metrics.cyclic_interpolation(sess, model, dataset, "")
+        metrics.cyclic_interpolation(sess, model, dataset, "", direct=True)
+        metrics.sample_from_classes(sess, model, dataset, "", valid_var=None)
 
 
 
-# TODO: cos jest zle
-# TODO: podaj dirichleta zamiast categorical?
-# TODO: inny koszt klasyfikacji? GMM likelihood, Bayes?
-# TODO: weight prior
-if __name__ == "__main__":
-    dataset_name = "svhn"
+def grid_train():
+    dataset_name = "celeba_singletag"
 
     if dataset_name == "mnist":
         labeled_num = 100
@@ -356,10 +424,10 @@ if __name__ == "__main__":
 
 
     if dataset_name == "svhn":
-        latent_dims = [16, 20]
+        latent_dims = [20]
         learning_rates = [3e-4]
         distance_weights = [0.]
-        cw_weights = [5.]
+        cw_weights = [1.]
         supervised_weights = [10.]
         kernel_nums = [5]
         batch_sizes = [1000]
@@ -396,17 +464,17 @@ if __name__ == "__main__":
 
     elif dataset_name == "celeba_multitag" or dataset_name == "celeba_singletag":
         latent_dims = [32]
-        learning_rates = [1e-3]
+        learning_rates = [5e-4]
         cw_weights = [5.]
         distance_weights = [0.]
         supervised_weights = [5.]
         kernel_nums = [32, 40]
         batch_sizes = [256]
-        hidden_dims = [256, 512]
+        hidden_dims = [256]
         gammas = [1.]
 
         # im większy init tym gorszy FID
-        inits = [1., 10.]
+        inits = [1., 5.]
         cc_eps = [0.0]
         # labeled_super_weights = [1.0]
         labeled_super_weights = [0.]
@@ -415,20 +483,20 @@ if __name__ == "__main__":
         alphas = [1e-3]
 
     elif dataset_name == "mnist":
-        latent_dims = [5, 10]
+        latent_dims = [10]
         distance_weights = [0.]
-        supervised_weights = [0.1]
-        kernel_nums = [4, 5, 6]
+        supervised_weights = [1.]
+        kernel_nums = [2]
 
-        learning_rates = [1e-3]
+        learning_rates = [3e-4, 2e-4, 4e-4]
         cw_weights = [5.]
         # dla bs=200 tez spoko dziala
         batch_sizes = [100]
-        hidden_dims = [100, 300, 500]
+        hidden_dims = [786]
         gammas = [1.0]
 
         # init nie ma wiekszego znaczenia chyba
-        inits = [0.1]
+        inits = [1.]
         cc_eps = [0.0]
         # labeled_super_weights = [1.0]
         labeled_super_weights = [0.]
@@ -450,3 +518,7 @@ if __name__ == "__main__":
         gc.collect()
         # h = hpy()
         # print(h.heap())
+
+if __name__ == "__main__":
+    load_and_test()
+
