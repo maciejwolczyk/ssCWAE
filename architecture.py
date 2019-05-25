@@ -126,7 +126,7 @@ class CelebaCoder():
 
             h = tfl.flatten(h)
             h = tfl.dense(h, units=self.h_dim, activation=tf.nn.relu)
-            # h = tfl.dense(h, units=self.h_dim, activation=tf.nn.relu)
+            h = tfl.dense(h, units=self.h_dim, activation=tf.nn.relu)
             z_mean = tfl.dense(h, units=z_dim, name='z_mean')
             # z_mean = tfl.batch_normalization(z_mean, training=training)
             return z_mean
@@ -137,7 +137,7 @@ class CelebaCoder():
         with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
             h = z
             h = tfl.dense(h, units=self.h_dim, activation=tf.nn.relu)
-            # h = tfl.dense(h, units=self.h_dim, activation=tf.nn.relu)
+            h = tfl.dense(h, units=self.h_dim, activation=tf.nn.relu)
             stride = 16
             h = tfl.dense(
                     h, units=im_h // stride * im_w // stride * self.kernel_num * 2,

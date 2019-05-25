@@ -138,9 +138,6 @@ class Dataset:
         labels_props = self.train["y"].sum(0) / self.train["y"].sum()
         print("Labels len", len(labels), "shape", labels.shape, "Props", labels_props)
 
-        # TODO: naprawić proporcje
-        # labels_props = np.array([0.1] * 10)
-
         if keep_labels_proportions:
             argmax_labels = labels.argmax(-1).squeeze()
             labels_len = labels.shape[-1]
@@ -238,13 +235,13 @@ class Dataset:
         self.labeled_train["X"] = self.labeled_train["X"][indices]
         self.labeled_train["y"] = self.labeled_train["y"][indices]
 
-def get_mnist():
+def get_mnist(extra=True):
     mnist_train, mnist_test = tf.keras.datasets.mnist.load_data()
     labels = list(str(i) for i in range(10))
     return mnist_train, mnist_test, labels, "mnist"
 
 
-def get_fashion_mnist():
+def get_fashion_mnist(extra=True):
     fmnist_train, fmnist_test = tf.keras.datasets.fashion_mnist.load_data()
 
     onehot_labels = np.zeros(fmnist_train[1].shape + (10,))
@@ -278,20 +275,20 @@ def get_svhn(extra=True): # / 255?
 
     return dataset_train, dataset_test, labels, "svhn"
 
-def get_norb(): # Doesn't work
+def get_norb(extra=True): # Doesn't work
     train_X = sio.loadmat("dataset/norb/smallnorb-train-dat.mat")
     train_y = sio.loadmat("dataset/norb/smallnorb-train-cat.mat")
     test_X = sio.loadmat("dataset/norb/smallnorb-test-dat.mat")
     test_y = sio.loadmat("dataset/norb/smallnorb-test-cat.mat")
     print(train_X.shape, train_y.shape, test_X.shape, test_y.shape)
 
-def get_cifar():
+def get_cifar(extra=True):
     cifar_train, cifar_test = tf.keras.datasets.cifar10.load_data()
     labels = ["airplane", "automobile", "bird", "cat",
           "deer", "dog", "frog", "horse", "ship", "truck"]
     return cifar_train, cifar_test, labels, "cifar"
 
-def get_celeba_images(examples_num):
+def get_celeba_images(examples_num, extra=True):
 
     dataset_dir = "/mnt/users/mwolczyk/local/Repos/networks-do-networks/dataset/img_align_celeba/"
     orig_size = [178, 218]
@@ -311,6 +308,9 @@ def get_celeba_images(examples_num):
     for idx, img_name in enumerate(tqdm(images_list)):
         if examples_num is not None and idx >= examples_num:
             break
+        if not extra and idx > 20000 and idx < 182637:
+            continue
+
         img = Image.open(dataset_dir + img_name).convert("RGB")
         img = img.crop((
             start_x,
@@ -329,8 +329,7 @@ def get_celeba_images(examples_num):
     return np.array(train), np.array(valid), np.array(test)
 
 
-# TODO: singletag
-def get_celeba_multitag():
+def get_celeba_multitag(extra=True):
     examples_num = 200000
     attr_labels = [
         "5_o_Clock_Shadow", "Arched_Eyebrows", "Attractive",
@@ -351,7 +350,7 @@ def get_celeba_multitag():
                       if label in chosen_attributes]
 
 
-    train_x, valid_x, test_x = get_celeba_images(examples_num)
+    train_x, valid_x, test_x = get_celeba_images(examples_num, extra=extra)
 
     train_y = []
     valid_y = []
@@ -364,6 +363,8 @@ def get_celeba_multitag():
         for idx, line in enumerate(f):
             if examples_num is not None and idx >= examples_num:
                 break
+            if not extra and idx > 20000 and idx < 182637:
+                continue
 
             labels = line.split()[1:]  # skip filename in the first column
             one_hot_label = [0] * (len(chosen_attributes) + 1)
@@ -376,7 +377,7 @@ def get_celeba_multitag():
                 elif val == -1:
                     pass
                 else:
-                    raise ValueError("Ani jeden ani minus jeden: {}".format(label))
+                    raise ValueError("Neither 1 nor -1: {}".format(label))
             if idx < 162770:
                 train_y += [one_hot_label]
             elif idx < 182637:
@@ -395,7 +396,7 @@ def get_celeba_multitag():
 
     return (train_x, train_y), (test_x, test_y), chosen_attributes + ["None"], "celeba_multitag"
 
-def get_celeba_singletag():
+def get_celeba_singletag(extra=True):
     examples_num = 200000
     attr_labels = [
         "5_o_Clock_Shadow", "Arched_Eyebrows", "Attractive",
@@ -411,13 +412,10 @@ def get_celeba_singletag():
     ]
     dataset_dir = "/mnt/users/mwolczyk/local/Repos/networks-do-networks/dataset/"
 
-    # chosen_attributes = ["Male", "Smiling"]
-    # TODO: uwazaj na kolejnosc
     chosen_attributes = ["Male", "Smiling"]
     chosen_indices = [idx for idx, label in enumerate(attr_labels)
                       if label in chosen_attributes]
 
-    # TODO: to trzeba madrzej
     classes_num = 4
     labels_names = ["F/NS", "F/S", "M/NS", "M/S"]
     # labels_names = ["Not smiling", "Smiling"]
@@ -432,6 +430,8 @@ def get_celeba_singletag():
         for line_idx, line in enumerate(f):
             if examples_num is not None and line_idx >= examples_num:
                 break
+            if not extra and line_idx > 20000 and line_idx < 182637:
+                continue
 
             labels = line.split()[1:]  # skip filename in the first column
 
@@ -444,7 +444,7 @@ def get_celeba_singletag():
                 elif val == -1:
                     pass
                 else:
-                    raise ValueError("Ani jeden ani minus jeden: {}".format(label))
+                    raise ValueError("Neither 1 nor -1: {}".format(label))
 
             one_hot_label = [0] * classes_num
             one_hot_label[label_val] = 1
@@ -460,7 +460,7 @@ def get_celeba_singletag():
     valid_y = np.array(valid_y)
     test_y = np.array(test_y)
 
-    train_x, valid_x, test_x = get_celeba_images(examples_num)
+    train_x, valid_x, test_x = get_celeba_images(examples_num, extra=extra)
 
     # If the example has no representation, pick
     # Y[Y.sum(1) == 0, -1] = 1
@@ -469,16 +469,19 @@ def get_celeba_singletag():
 
     return (train_x, train_y), (test_x, test_y), labels_names, "celeba_singletag"
 
-def get_celeba_smiles():
-    NUM_EXAMPLES = 199999
+def get_celeba_smiles(extra=True):
+    if extra:
+        num_examples = 20000
+    else:
+        num_examples = 199999
 
-    X = get_celeba_images(NUM_EXAMPLES)
+    X = get_celeba_images(num_examples)
 
     Y = []
     with open("dataset/Smiling_CELEBA.tsv") as f:
         f.readline() # Omitting header
         for idx, line in enumerate(f):
-            if idx >= NUM_EXAMPLES:
+            if idx >= num_examples:
                 break
             label = int(line.split("\t")[1])
 
@@ -487,7 +490,7 @@ def get_celeba_smiles():
             elif label == -1:
                 label = [1, 0]
             else:
-                raise ValueError("Ani jeden ani minus jeden: {}".format(label))
+                raise ValueError("Neither 1 nor -1: {}".format(label))
             Y += [label]
     Y = np.array(Y)
     print("Ratio of labels:", Y.sum(axis=0) / Y.shape[0])
@@ -496,16 +499,19 @@ def get_celeba_smiles():
     return (train_x, train_y), (test_x, test_y), ["No smile", "Smile"], "celeba_smiles"
 
 
-def get_celeba_glasses():
-    NUM_EXAMPLES = 100000
+def get_celeba_glasses(extra=True):
+    if extra:
+        num_examples = 20000
+    else:
+        num_examples = 199999
 
-    X = get_celeba_images(NUM_EXAMPLES)
+    X = get_celeba_images(num_examples)
 
     Y = []
     with open("dataset/Eyeglasses_CELEBA.tsv") as f:
         f.readline() # Omitting header
         for idx, line in enumerate(f):
-            if idx >= NUM_EXAMPLES:
+            if idx >= num_examples:
                 break
             label = int(line.split("\t")[1])
 
@@ -514,7 +520,7 @@ def get_celeba_glasses():
             elif label == -1:
                 label = [1, 0]
             else:
-                raise ValueError("Ani jeden ani minus jeden: {}".format(label))
+                raise ValueError("Neither 1 nor -1: {}".format(label))
             Y += [label]
     Y = np.array(Y)
     print("Ratio of labels:", Y.sum(axis=0) / Y.shape[0])
@@ -523,7 +529,7 @@ def get_celeba_glasses():
     return (train_x, train_y), (test_x, test_y), ["No glasses", "Glasses"], "celeba_glasses"
 
 
-def get_dataset_by_name(name, rng_seed):
+def get_dataset_by_name(name, rng_seed, extra=True):
     dataset_getters = {
        "mnist": get_mnist,
        "fashion_mnist": get_fashion_mnist,
@@ -536,7 +542,7 @@ def get_dataset_by_name(name, rng_seed):
     }
 
     getter = dataset_getters[name]
-    train, test, labels, name = getter()
+    train, test, labels, name = getter(extra=extra)
     dataset = Dataset(train, test, labels, name, rng_seed=rng_seed)
     return dataset
 

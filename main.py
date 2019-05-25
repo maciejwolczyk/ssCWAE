@@ -107,27 +107,27 @@ def train_model(
     #         kernel_size=3,
     #         kernel_num=kernel_num)
 
-    coder = architecture.CelebaCoder(
-        dataset, kernel_num=kn, h_dim=h_dim)
-    # coder = architecture.FCCoder(
-    #     dataset, h_dim=h_dim, layers_num=kernel_num)
-    # coder = architecture.CifarCoder(
-    #     dataset, kernel_num=kn, h_dim=h_dim)
+
+    if dataset_name == "celeba_multitag" or dataset_name == "celeba_singletag":
+        coder = architecture.CelebaCoder(
+            dataset, kernel_num=kernel_num, h_dim=h_dim)
+    else:
+        coder = architecture.FCCoder(
+            dataset, h_dim=h_dim, layers_num=kernel_num)
 
     classifier_cls = architecture.DummyClassifier
     # coder = architecture.FCClassifierCoder(
     #     dataset, h_dim=h_dim, layers_num=kernel_num)
 
 
-
     model_type = "gmmcwae"
     model_name = (
         "{}/{}/{}/{}d_erfw{}_kn{}_hd{}_bs{}_sw{}_dw{}_a{}_gw{}_init{}" +
-        "cw{}_lr{}_100l_noalpha_noneqprob_nobn_cyclic_nowhiten_rep_1000e_dataset").format(
+        "cw{}_lr{}_noneqprob_cyclic_mse_2rep").format(
             dataset.name, coder.__class__.__name__, model_type,
             latent_dim, erf_weight, kernel_num, h_dim,
             batch_size, supervised_weight, distance_weight, erf_alpha,
-            gamma, init, cw_weight, lr)
+            gamma, init, cw_weight, learning_rate)
 
     print(model_name)
     prepare_directories(model_name)
@@ -142,15 +142,15 @@ def train_model(
                 distance_weight=distance_weight, cw_weight=cw_weight,
                 init=init, gamma_weight=gamma, classifier_cls=classifier_cls,
                 erf_weight=erf_weight, erf_alpha=erf_alpha,
-                labeled_super_weight=labeled_super_weight, learning_rate=lr)
+                labeled_super_weight=labeled_super_weight, learning_rate=learning_rate)
     elif model_type == "onecwae":
         model = cwae.CwaeModel(
-                model_name, coder, dataset, learning_rate=lr,
+                model_name, coder, dataset, learning_rate=learning_rate,
                 z_dim=latent_dim, gamma_weight=gamma,
                 cw_weight=cw_weight)
     elif model_type == "multigmmcwae":
         model = cwae.MultiGmmCwaeModel(
-                model_name, coder, dataset, learning_rate=lr,
+                model_name, coder, dataset, learning_rate=learning_rate,
                 z_dim=latent_dim, gamma_weight=gamma,
                 cw_weight=cw_weight, supervised_weight=supervised_weight,
                 init=init, gaussians_per_class=2)
@@ -158,7 +158,7 @@ def train_model(
         model = cwae.DeepGmmModel(
                 model_name, coder, dataset, m1=None,
                 z_dim=latent_dim, supervised_weight=supervised_weight,
-                learning_rate=lr, cw_weight=cw_weight,
+                learning_rate=learning_rate, cw_weight=cw_weight,
                 init=init, gamma_weight=gamma)
     else:
         raise NotImplemented
@@ -184,9 +184,7 @@ def run_training(model, dataset, batch_size):
         costs = np.array(costs)
         train_costs, valid_costs, test_costs = costs[:, 0], costs[:, 1], costs[:, 2]
 
-        # TODO:
-        if dataset.name != "mnist" and False:
-            metrics.save_samples(sess, model, dataset, 10000)
+        metrics.save_samples(sess, model, dataset, 10000)
         metrics.save_costs(model, train_costs, "train")
         metrics.save_costs(model, valid_costs, "valid")
         metrics.save_costs(model, test_costs, "test")
@@ -303,7 +301,7 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
             epoch_n, dataset, filename_prefix="test",
             subset=None)
 
-    if epoch_n % 100 == 0:
+    if epoch_n % 500 == 0:
         save_path = model.saver.save(
                 sess, "results/{}/epoch={}.ckpt".format(model.name, epoch_n))
         print("Model saved in path: {}".format(save_path))
@@ -316,11 +314,13 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
             print("Mean diff:", mean_diff)
 
         metrics.interpolation(sess, model, dataset, epoch_n)
-        metrics.inter_class_interpolation(sess, model, dataset, epoch_n)
-        metrics.cyclic_interpolation(sess, model, dataset, epoch_n)
-        metrics.cyclic_interpolation(sess, model, dataset, epoch_n, direct=True)
-        # metrics.sample_from_classes(sess, model, dataset, epoch_n, valid_var)
         metrics.sample_from_classes(sess, model, dataset, epoch_n, valid_var=None)
+
+        if type(model).__name__ != "CwaeModel":
+            metrics.inter_class_interpolation(sess, model, dataset, epoch_n)
+            metrics.cyclic_interpolation(sess, model, dataset, epoch_n)
+            metrics.cyclic_interpolation(sess, model, dataset, epoch_n, direct=True)
+            # metrics.sample_from_classes(sess, model, dataset, epoch_n, valid_var)
 
     if epoch_n % 5 == 0:
         metrics.save_distance_matrix(sess, model, epoch_n)
@@ -329,14 +329,19 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
 
 
 def load_and_test():
-    weights_filename = "32d_erfw0.0_kn32_hd256_bs256_sw5.0_dw0.0_a0.001_gw1.0_init1.0cw5.0_lr0.0005_100l_noalpha_noneqprob_nobn_cyclic_nowhiten_rep_1000e_dataset"
+    # weights_filename = "20d_erfw0.0_kn5_hd786_bs1000_sw10.0_dw0.0_a0.001_gw1.0_init2.0cw5.0_lr0.0003_1000l_noalpha_noneqprob_nobn_cyclic_finaltest"
+    # weights_filename = "20d_erfw0.0_kn5_hd786_bs1000_sw0.0_dw0.0_a0.001_gw1.0_init2.0cw5.0_lr0.0003_100l_noalpha_noneqprob_nobn_cyclic_nowhiten_rep_1000e_dataset"
+    # weights_filename = "20d_erfw0.0_kn5_hd786_bs1000_sw5.0_dw0.0_a0.001_gw1.0_init2.0cw5.0_lr0.0003_100l_noalpha_noneqprob_nobn_cyclic_nowhiten_rep_1000e_dataset"
+    weights_filename = "32d_erfw0.0_kn32_hd1024_bs256_sw10.0_dw0.0_a0.001_gw1.0_init1.0cw5.0_lr0.0003_100l_noalpha_noneqprob_nobn_cyclic_nowhiten_rep_1000e_dataset"
+
+    model_type = "gmmcwae"
+    model_name = "celeba_gmm_bigger_hd1024"
     epoch_n = 500
     dataset_name = "celeba_singletag"
 
 
     if dataset_name == "mnist":
         labeled_examples_num = 100
-        model_name = "mnist_reload"
         latent_dim = 10
         supervised_weight = 1.
         kernel_num = 2
@@ -347,7 +352,6 @@ def load_and_test():
         init = 1.
 
     elif dataset_name == "svhn":
-        model_name = "svhn_reload"
         labeled_examples_num = 1000
         latent_dim = 20
         learning_rate = 3e-4
@@ -359,56 +363,66 @@ def load_and_test():
         init = 2.
 
     elif dataset_name == "celeba_multitag" or dataset_name == "celeba_singletag":
-        model_name = "celeba_reload"
         labeled_examples_num = 1000
         latent_dim = 32
-        learning_rate = 5e-4
+        learning_rate = 3e-4
         cw_weight = 5.
         supervised_weight = 5.
         kernel_num = 32
         batch_size = 256
-        h_dim = 256
+        h_dim = 1024
         init = 1.
 
     prepare_directories(model_name)
-    dataset = data_loader.get_dataset_by_name(dataset_name, rng_seed=23)
+    dataset = data_loader.get_dataset_by_name(dataset_name, rng_seed=23, extra=False)
     dataset.remove_labels_fraction(
         number_to_keep=labeled_examples_num,
         keep_labels_proportions=True, batch_size=100)
 
     
-    coder = architecture.CelebaCoder(
-        dataset, kernel_num=kernel_num, h_dim=h_dim)
-    # coder = architecture.FCCoder(
-    #     dataset, h_dim=h_dim, layers_num=kernel_num)
+    if dataset_name == "celeba_multitag" or dataset_name == "celeba_singletag":
+        coder = architecture.CelebaCoder(
+            dataset, kernel_num=kernel_num, h_dim=h_dim)
+    else:
+        coder = architecture.FCCoder(
+            dataset, h_dim=h_dim, layers_num=kernel_num)
 
     classifier_cls = architecture.DummyClassifier
 
-    model = cwae.GmmCwaeModel(
-            model_name, coder, dataset,
-            z_dim=latent_dim,
-            supervised_weight=supervised_weight,
-            distance_weight=0., cw_weight=cw_weight,
-            init=init, gamma_weight=1., classifier_cls=classifier_cls,
-            erf_weight=0., erf_alpha=0.01,
-            labeled_super_weight=0., learning_rate=learning_rate)
+    if model_type == "onecwae":
+        model = cwae.CwaeModel(
+                model_name, coder, dataset, learning_rate=learning_rate,
+                z_dim=latent_dim, gamma_weight=1.,
+                cw_weight=cw_weight)
+    else:
+        model = cwae.GmmCwaeModel(
+                model_name, coder, dataset,
+                z_dim=latent_dim,
+                supervised_weight=supervised_weight,
+                distance_weight=0., cw_weight=cw_weight,
+                init=init, gamma_weight=1., classifier_cls=classifier_cls,
+                erf_weight=0., erf_alpha=0.01,
+                labeled_super_weight=0., learning_rate=learning_rate)
 
-    weights_path = "results/{}/{}/gmmcwae/{}/epoch={}.ckpt".format(
-            dataset.name, coder.__class__.__name__, weights_filename, epoch_n) 
+
+    weights_path = "results/{}/{}/{}/{}/epoch={}.ckpt".format(
+            dataset.name, coder.__class__.__name__, model_type, weights_filename, epoch_n) 
     
     with tf.Session(config=frugal_config) as sess:
         sess.run(tf.global_variables_initializer())
         model.saver.restore(sess, weights_path)
         metrics.interpolation(sess, model, dataset, "")
         # metrics.inter_class_interpolation(sess, model, dataset, "")
-        metrics.cyclic_interpolation(sess, model, dataset, "")
-        metrics.cyclic_interpolation(sess, model, dataset, "", direct=True)
         metrics.sample_from_classes(sess, model, dataset, "", valid_var=None)
+        metrics.save_samples(sess, model, dataset, 10000)
 
-
+        if model_type != "onecwae":
+            metrics.cyclic_interpolation(sess, model, dataset, "")
+            metrics.cyclic_interpolation(sess, model, dataset, "", extrapolate=True)
+            metrics.cyclic_interpolation(sess, model, dataset, "", direct=True)
 
 def grid_train():
-    dataset_name = "celeba_singletag"
+    dataset_name = "mnist"
 
     if dataset_name == "mnist":
         labeled_num = 100
@@ -427,14 +441,14 @@ def grid_train():
         latent_dims = [20]
         learning_rates = [3e-4]
         distance_weights = [0.]
-        cw_weights = [1.]
-        supervised_weights = [10.]
+        cw_weights = [5.]
+        supervised_weights = [0.]
         kernel_nums = [5]
         batch_sizes = [1000]
         hidden_dims = [786]
         gammas = [1.]
 
-        inits = [2., 4.]
+        inits = [2.]
         cc_eps = [0.0]
         # labeled_super_weights = [1.0]
         labeled_super_weights = [0.]
@@ -464,17 +478,17 @@ def grid_train():
 
     elif dataset_name == "celeba_multitag" or dataset_name == "celeba_singletag":
         latent_dims = [32]
-        learning_rates = [5e-4]
+        learning_rates = [3e-4]
         cw_weights = [5.]
         distance_weights = [0.]
-        supervised_weights = [5.]
-        kernel_nums = [32, 40]
+        supervised_weights = [10.]
+        kernel_nums = [32]
         batch_sizes = [256]
-        hidden_dims = [256]
+        hidden_dims = [786]
         gammas = [1.]
 
         # im większy init tym gorszy FID
-        inits = [1., 5.]
+        inits = [1.]
         cc_eps = [0.0]
         # labeled_super_weights = [1.0]
         labeled_super_weights = [0.]
@@ -485,22 +499,22 @@ def grid_train():
     elif dataset_name == "mnist":
         latent_dims = [10]
         distance_weights = [0.]
-        supervised_weights = [1.]
+        supervised_weights = [0.]
         kernel_nums = [2]
 
-        learning_rates = [3e-4, 2e-4, 4e-4]
+        learning_rates = [3e-4]
         cw_weights = [5.]
         # dla bs=200 tez spoko dziala
         batch_sizes = [100]
-        hidden_dims = [786]
+        hidden_dims = [1024]
         gammas = [1.0]
 
         # init nie ma wiekszego znaczenia chyba
-        inits = [1.]
+        inits = [0.1]
         cc_eps = [0.0]
         # labeled_super_weights = [1.0]
         labeled_super_weights = [0.]
-        rng_seeds = [20]
+        rng_seeds = [25]
         erf_weights = [0.]
         alphas = [1e-3]
 
@@ -520,5 +534,5 @@ def grid_train():
         # print(h.heap())
 
 if __name__ == "__main__":
-    load_and_test()
+    grid_train()
 

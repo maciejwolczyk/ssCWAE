@@ -39,7 +39,7 @@ def draw_gmm(
     plt.scatter(labeled_z[:, 0], labeled_z[:, 1], c=c)
 
     if means is not None:
-        gaussians_per_class = len(means) // dataset.classes_num
+        gaussians_per_class = max(len(means) // dataset.classes_num, 1)
         for i in range(len(means)):
             c = color_arr[i // gaussians_per_class]
             circle = plt.Circle(
@@ -79,7 +79,6 @@ def evaluate_cwae(
     metrics_tensors = {
         "cramer-wold": model.costs["cw"],
         "reconstruction": model.costs["reconstruction"],
-        "cpd": model.costs["cpd"],
         "full": model.costs["full"],
     }
 
@@ -140,7 +139,7 @@ def evaluate_cwae(
 
     if epoch % 5 == 0:
         print(epoch, "Dataset:", filename_prefix, end="\t")
-        for key in ["cramer-wold", "cpd", "reconstruction", "entropy", "full"]:
+        for key in ["cramer-wold", "reconstruction", "full"]:
             print("{}: {:.4f}".format(key, metrics_final[key]), end=" ")
         print()
 
@@ -483,6 +482,11 @@ def sample_from_classes(sess, model, dataset, epoch, valid_var=None, show_only=F
         means_val = np.tile(means_val, (10, 1))
         alphas_val = np.tile(alphas_val, (10,))
 
+    if dataset.name == "svhn":
+        # Move the "zeros" row from the end to the beginning
+        means_val = np.roll(means_val, 1, axis=0)
+        alphas_val = np.roll(alphas_val, 1, axis=0)
+
     im_h, im_w, im_c = dataset.image_shape
 
     if valid_var is not None:
@@ -603,11 +607,14 @@ def save_samples(sess, model, dataset, n_samples):
         for idx, pixels in enumerate(generated):
             filename = "results/{}/final_samples/c{}_{}.png".format(
                 model.name, class_idx, str(idx).zfill(5))
-            img = Image.fromarray(pixels, "RGB")
+            if dataset.name == "mnist":
+                img = Image.fromarray(pixels.squeeze(), "L")
+            else:
+                img = Image.fromarray(pixels, "RGB")
             img.save(filename)
 
 
-def inter_class_interpolation(sess, model, dataset, epoch, show_only=False):
+def inter_class_interpolation(sess, model, dataset, epoch, show_only=False, extrapolate=False):
     means_val, alphas_val, p_val = sess.run(
             [model.gausses["means"],
              model.gausses["variations"],
@@ -632,7 +639,8 @@ def inter_class_interpolation(sess, model, dataset, epoch, show_only=False):
             mean_diff_matrix[label][(label + 1) % dataset.classes_num])
 
         z_inputs = []
-        for step_size in np.linspace(0, 1.0, num=interpolation_steps + 2):
+        linspace_end = -0.5 if extrapolate else 1.
+        for step_size in np.linspace(0, linspace_end, num=interpolation_steps + 2):
             z_inputs += [tensor_z[idx] + interpolation_direction * step_size]
 
         outputs = sess.run(model.out["y"], {model.out["z"]: z_inputs})
@@ -655,16 +663,24 @@ def inter_class_interpolation(sess, model, dataset, epoch, show_only=False):
     if show_only:
         plt.show()
     else:
-        filename = "results/{}/class_interpolation_{}.png".format(
-            model.name, str(epoch).zfill(3))
+        interpolation_type = "extrapolation" if extrapolate else "interpolation"
+        filename = "results/{}/class_{}_{}.png".format(
+            model.name, interpolation_type, str(epoch).zfill(3))
         plt.savefig(filename, bbox_inches='tight', pad_inches=0)
     plt.close(fig)
 
-def cyclic_interpolation(sess, model, dataset, epoch, show_only=False, direct=False):
+def cyclic_interpolation(sess, model, dataset, epoch, show_only=False, direct=False, extrapolate=False):
     means_val, alphas_val, p_val = sess.run(
             [model.gausses["means"],
              model.gausses["variations"],
              model.gausses["probs"]])
+
+    if dataset.name == "svhn":
+        # Move the "zeros" row from the end to the beginning
+        means_val = np.roll(means_val, 1, axis=0)
+        alphas_val = np.roll(alphas_val, 1, axis=0)
+        dataset.label_names = [str(idx) for idx in range(10)]
+
 
     mean_diff_matrix = np.expand_dims(means_val, 0) - np.expand_dims(means_val, 1)
     im_h, im_w, im_c = dataset.image_shape
@@ -683,7 +699,12 @@ def cyclic_interpolation(sess, model, dataset, epoch, show_only=False, direct=Fa
     for idx in interpolating_samples:
         fig = plt.figure(figsize=(interpolation_steps, samples_num))
 
-        label = np.argmax(dataset.test["y"][idx])
+        # label = np.argmax(dataset.test["y"][idx])
+        label = np.argmax(probs[idx])
+        if dataset.name == "svhn":
+            label = (label + 1) % 10
+
+
         canvas = np.ones(((im_h + padding) * (dataset.classes_num), im_w * interpolation_steps, im_c))
 
         for direction in range(dataset.classes_num):
@@ -693,8 +714,9 @@ def cyclic_interpolation(sess, model, dataset, epoch, show_only=False, direct=Fa
             else:
                 interpolation_direction = mean_diff_matrix[label][direction]
 
+            linspace_end = -0.5 if extrapolate else 1.
             z_inputs = []
-            for step_size in np.linspace(0., 1., num=interpolation_steps):
+            for step_size in np.linspace(0., linspace_end, num=interpolation_steps):
                 z_inputs += [tensor_z[idx] + interpolation_direction * step_size]
 
             outputs, sample_probs = sess.run(
@@ -713,8 +735,6 @@ def cyclic_interpolation(sess, model, dataset, epoch, show_only=False, direct=Fa
 
                 canvas[start_h:start_h + im_h,
                        im_w * output_idx:im_w * (output_idx + 1)] = output.reshape(im_h, im_w, im_c)
-        
-
 
         plt.xticks([])
         plt.yticks([])
@@ -732,9 +752,10 @@ def cyclic_interpolation(sess, model, dataset, epoch, show_only=False, direct=Fa
         if show_only:
             plt.show()
         else:
+            inter_direction = "extrapolation" if extrapolate else "interpolation"
             inter_type = "direct" if direct else "cyclic"
-            filename = "results/{}/{}_interpolation_{}_{}.png".format(
-                model.name, inter_type, str(epoch).zfill(3), idx)
+            filename = "results/{}/{}_{}_{}_{}.png".format(
+                model.name, inter_type, inter_direction, str(epoch).zfill(3), idx)
             plt.savefig(filename, bbox_inches='tight', pad_inches=0)
         plt.close(fig)
 

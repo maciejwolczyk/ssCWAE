@@ -94,13 +94,13 @@ def cramer_wold_distance(X, m, alpha, p, gamma, weighted=False):
     C = tf.reduce_sum(C3)
     return tf.reduce_mean(A + B - C)
 
-def single_cramer_wold_distance(X, gamma):
+def single_cramer_wold_distance(X, means, gamma):
     N = tf.cast(tf.shape(X)[0], tf.float32)
     D = tf.cast(tf.shape(X)[1], tf.float32)
     # N0 = 73257
     N0 = N
 
-    alpha = 1
+    alpha = 1.
 
     X_sub_matrix = tf.subtract(tf.expand_dims(X, 0), tf.expand_dims(X, 1))
     A1 = norm_squared(X_sub_matrix, axis=2)
@@ -108,10 +108,11 @@ def single_cramer_wold_distance(X, gamma):
     A1 = tf.reduce_sum(phi_d(A1 / (4 * gamma), D))
     A = 1/(N*N * tf.sqrt(2 * pi * 2 * gamma)) * A1
 
-    B3 = 1 / tf.sqrt(2 * pi * (alpha + 2 * gamma))
+    B3 = 1 / tf.sqrt(2 * pi * (alpha + alpha + 2 * gamma))
     B = tf.reduce_sum(B3)
 
-    C1 = norm_squared(X, axis=1)
+    m_X_sub_matrix = tf.subtract(means, X)
+    C1 = norm_squared(m_X_sub_matrix, axis=1)
     C2 = phi_d(C1 / (2 * (alpha + 2 * gamma)), D)
     class_logits = C2
     C3 = 2 / (N * tf.sqrt(2 * pi * (alpha + 2 * gamma))) * C2
@@ -412,14 +413,14 @@ class CwaeClassifier:
 
 
 class CwaeModel():
-
     def __init__(
-        self, name, coder, dataset, latent_dim=300,
+        self, name, coder, dataset, z_dim=300,
         learning_rate=1e-3, gamma_weight=1.0, cw_weight=1.0):
 
 
+        self.m1 = None
         self.name = name
-        self.z_dim = latent_dim
+        self.z_dim = z_dim
         tf.reset_default_graph()
 
         optimizer = tft.AdamOptimizer(learning_rate)
@@ -433,9 +434,9 @@ class CwaeModel():
         tensor_training = tf.placeholder_with_default(False, shape=[])
 
         labeled_mask = get_labels_mask(tensor_labels)
-        means, variances, probs = get_gaussians(latent_dim, 0., dataset, 1)
+        means, variances, probs = get_gaussians(z_dim, 0., dataset, 1)
 
-        tensor_z = coder.encode(tensor_x, latent_dim, tensor_training)
+        tensor_z = coder.encode(tensor_x, z_dim, tensor_training)
         tensor_y = coder.decode(tensor_z, dataset.x_dim, tensor_training)
 
         rec_cost = norm_squared(tensor_x - tensor_y, axis=-1)
@@ -457,14 +458,14 @@ class CwaeModel():
         gamma *= gamma_weight
 
         # TODO: log_cw
-        # cw_cost = single_cramer_wold_distance(unsupervised_tensor_z, gamma)
-        cw_cost = WAECost("jacek_regular").evaluate(unsupervised_tensor_z, latent_dim)
+        cw_cost = single_cramer_wold_distance(unsupervised_tensor_z, means, gamma)
+        # cw_cost = WAECost("jacek_regular").evaluate(unsupervised_tensor_z, latent_dim)
         log_cw_cost = cw_weight * tf.log(cw_cost)
 
         cpd_cost = conditionally_positive_distance(unsupervised_tensor_z)
         cpd_cost *= cw_weight
 
-        full_cost = tf.reduce_mean(rec_cost + cw_cost)
+        full_cost = tf.reduce_mean(rec_cost + log_cw_cost)
         train_op = optimizer.minimize(full_cost)
 
         full_cpd_cost = tf.reduce_mean(rec_cost + cpd_cost)
@@ -592,12 +593,17 @@ class GmmCwaeModel():
             norm_probs = tf.ones((examples_num,), dtype=tf.float32) / tf.cast(examples_num, tf.float32)
 
 
-        # Coder and decoder
         # TODO: bardzo glupie, N0 nie moze byc liczone na podstawie tensor_x,
         # bo nie mamy go przy samplowaniu
         N0 = tf.cast(tf.shape(tensor_x)[0], tf.float32)
         tensor_simplex_y = tf.tile(tf.reshape(simplex_y, (1, -1)), (N0, 1))
         tensor_z = coder.encode(tensor_x, z_dim, tensor_training)
+
+        # tensor_z = tf.cond(
+        #     tensor_training,
+        #     lambda: tensor_z + tf.random.normal(tf.shape(tensor_z), 0, 1e-1),
+        #     lambda: tensor_z
+        # )
 
         N0 = tf.cast(tf.shape(tensor_z)[0], tf.float32)
         tensor_simplex_y = tf.tile(tf.reshape(simplex_y, (1, -1)), (N0, 1))
@@ -637,7 +643,7 @@ class GmmCwaeModel():
         cpd_cost = gmm_conditionally_positive_distance(unsupervised_tensor_z, means, z_dim)
         # log_cw_cost = cpd_cost
 
-        if dataset.name == "mnist":
+        if dataset.name == "mnist" and False:
             rec_cost = tensor_x * tf.log(tensor_y + 1e-8) + (1 - tensor_x) * tf.log(1 - tensor_y + 1e-8)
             rec_cost = -tf.reduce_sum(rec_cost, axis=-1)
         else:
@@ -1270,8 +1276,6 @@ def phi_g(s):
             0.39894228 + 0.01328592*t**(-1) + 0.00225319*t**(-2)
             - 0.00157565*t**(-3) + 0.0091628*t**(-4) - 0.02057706*t**(-5)
             + 0.02635537*t**(-6) - 0.01647633*t**(-7) + 0.00392377*t**(-8))
-
-
 def phi(x):
     a = 7.5
     return phi_f(tf.minimum(x, a)) - phi_f(a) + phi_g(tf.maximum(x, a))
@@ -1320,7 +1324,11 @@ def get_gaussians(z_dim, init, dataset, gauss_num):
 
         variable_means = True
         if gauss_num == 1:
-            means = tf.constant([[0] * z_dim], dtype=tf.float32)
+            initializer = tf.constant_initializer([[0] * z_dim])
+            means = tf.get_variable(
+                "gmm_means", [1, z_dim],
+                initializer=initializer, dtype=tf.float32
+            )
         elif variable_means:
             # means_initialization = tf.constant_initializer(
             #     np.random.normal(0, init, size=(G, z_dim)))
@@ -1348,6 +1356,9 @@ def get_gaussians(z_dim, init, dataset, gauss_num):
         gaussians_per_class = gauss_num // len(labels_proportions)
         probs = tf.tile(tf.expand_dims(probs, -1), (1, gaussians_per_class))
         probs = tf.reshape(probs, (-1,))
+
+        if gauss_num == 1:
+            probs = tf.constant([1.], dtype=tf.float32)
 
         # probs = tf.constant([1 / G] * G, dtype=tf.float32)
 
