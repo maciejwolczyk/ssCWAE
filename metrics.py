@@ -575,19 +575,79 @@ def sample_from_classes(sess, model, dataset, epoch, valid_var=None, show_only=F
         plt.close()
 
 
+def save_interpolation_samples(sess, model, dataset, n_samples, from_dataset=True):
+    im_h, im_w, im_c = dataset.image_shape
+    batch_size = 1000
+    batch_num = (n_samples // batch_size)
+
+    if not from_dataset:
+        output_tensors = [
+            model.gausses["means"],
+            model.gausses["variations"],
+            model.gausses["probs"]
+        ]
+
+        mean_vals, cov_vals, prob_vals = sess.run(output_tensors)
+
+
+    assert batch_num * batch_size == n_samples
+
+    for batch_idx in range(batch_num):
+        if from_dataset:
+            indices = np.random.choice(
+                len(dataset.test["X"]),
+                replace=False,
+                size=(batch_size * 2)
+            )
+            samples = sess.run(
+                model.out["z"],
+                {model.placeholders["X"]: dataset.test["X"][indices]}
+            )
+            samples = samples.reshape((batch_size, 2, -1))
+        else:
+            samples = np.random.normal(size=(batch_size * 2, model.z_dim)) # [N, C]
+            class_indices = np.random.choice(
+                dataset.classes_num,  size=batch_size * 2, p=prob_vals,
+                ) # [N]
+            samples += mean_vals[class_indices]
+            samples = samples.reshape((batch_size, 2, -1))
+
+        interpols = (samples[:, 1] - samples [:, 0]) * np.random.random((batch_size, 1))
+        interpols = interpols + samples[:, 0]
+        interpols.reshape(batch_size, -1)
+        generated = sess.run(model.out["y"], {model.out["z"]: interpols})
+        if dataset.whitened:
+            generated = dataset.blackening(generated)
+
+        generated[generated < 0] = 0
+        generated[generated > 1] = 1
+        generated = (generated * 255).astype("uint8").reshape([-1] + dataset.image_shape)
+
+        for idx, pixels in enumerate(generated):
+            postfix = "" if from_dataset else "_gen"
+            filename = "results/{}/final_inter{}_samples/inter{}_{}.png".format(
+                model.name, postfix, str(batch_idx).zfill(2), str(idx).zfill(5))
+            if dataset.name == "mnist":
+                img = Image.fromarray(pixels.squeeze(), "L")
+            else:
+                img = Image.fromarray(pixels, "RGB")
+            img.save(filename)
+
+# TODO: rerun fids since probs changed!!!
 def save_samples(sess, model, dataset, n_samples):
-    means_val, covs_val = sess.run(
-            [model.gausses["means"], model.gausses["variations"]])
+    means_val, covs_val, prob_vals = sess.run(
+        [model.gausses["means"], model.gausses["variations"], model.gausses["probs"]]
+        )
     im_h, im_w, im_c = dataset.image_shape
 
     if len(means_val) == 1:
-        means_val = np.tile(means_val, (10, 1))
-        covs_val = np.tile(covs_val, (10,))
+        means_val = np.tile(means_val, (dataset.classes_num, 1))
+        covs_val = np.tile(covs_val, (dataset.classes_num,))
 
     G = len(means_val)
 
     samples_per_class = np.random.multinomial(
-        10000, [1 / G] * G)
+        10000, prob_vals)
     print(samples_per_class)
 
     for class_idx in trange(G):
@@ -669,7 +729,109 @@ def inter_class_interpolation(sess, model, dataset, epoch, show_only=False, extr
         plt.savefig(filename, bbox_inches='tight', pad_inches=0)
     plt.close(fig)
 
-def cyclic_interpolation(sess, model, dataset, epoch, show_only=False, direct=False, extrapolate=False):
+
+def reconstruction(input_indices, sess, model, dataset, epoch):
+    im_h, im_w, im_c = dataset.image_shape
+
+    originals = dataset.test["X"][input_indices]
+    outputs = sess.run(
+        model.out["y"],
+        { model.placeholders["X"]: dataset.test["X"][input_indices] }
+    )
+
+    for output_idx, output in enumerate(outputs):
+        if dataset.whitened:
+            output = dataset.blackening(output)
+
+        output = output.reshape(im_h, im_w, im_c)
+        original = originals[output_idx].reshape(im_h, im_w, im_c)
+        whole_image = np.concatenate([output, original], 1).squeeze()
+        plt.imshow(whole_image, cmap="gray")
+        filename = "results/{}/reconstruction_{}_{}.png".format(
+            model.name, str(epoch).zfill(3), output_idx)
+        plt.savefig(filename, bbox_inches='tight', pad_inches=0)
+
+def chosen_class_interpolation(
+    input_indices, sess, model, dataset, epoch,
+    show_only=False, direct=False, extrapolate=False, chosen_inters=None):
+
+
+    means_val, alphas_val, p_val = sess.run(
+            [model.gausses["means"],
+             model.gausses["variations"],
+             model.gausses["probs"]])
+
+    if dataset.name == "svhn":
+        # Move the "zeros" row from the end to the beginning
+        means_val = np.roll(means_val, 1, axis=0)
+        alphas_val = np.roll(alphas_val, 1, axis=0)
+        dataset.label_names = [str(idx) for idx in range(10)]
+
+    mean_diff_matrix = np.expand_dims(means_val, 0) - np.expand_dims(means_val, 1)
+    im_h, im_w, im_c = dataset.image_shape
+
+    samples_num = len(input_indices)
+    interpolation_steps = 10
+    padding = 4
+
+    tensor_z, probs = sess.run(
+        [model.out["z"], model.out["probs"]],
+        { model.placeholders["X"]: dataset.test["X"][input_indices] }
+    )
+
+
+    inter_type = "direct" if direct else "cyclic"
+    inter_direction = "extrapolation" if extrapolate else "interpolation"
+
+    for idx in range(samples_num):
+        fig = plt.figure(figsize=(interpolation_steps, 1))
+
+        label = np.argmax(probs[idx])
+        if dataset.name == "svhn":
+            label = (label + 1) % 10
+
+        canvas = np.ones((im_h + padding, im_w * interpolation_steps, im_c))
+        direction = chosen_inters[idx]
+        if direct:
+            interpolation_direction = means_val[direction] - tensor_z[idx]
+        else:
+            interpolation_direction = mean_diff_matrix[label][direction]
+
+        linspace_end = -0.5 if extrapolate else 1.
+        z_inputs = []
+        for step_size in np.linspace(0., linspace_end, num=interpolation_steps):
+            z_inputs += [tensor_z[idx] + interpolation_direction * step_size]
+
+        outputs, sample_probs = sess.run(
+            [model.out["y"], model.out["probs"]],
+            {model.out["z"]: z_inputs}
+        )
+
+        for output_idx, output in enumerate(outputs):
+            if dataset.whitened:
+                output = dataset.blackening(output)
+            caption = "{} {}%".format(
+                dataset.labels_names[sample_probs[output_idx].argmax()],
+                round(float(sample_probs[output_idx].max() * 100), 2))
+            plt.text(im_w * output_idx, 3, caption, fontsize=6)
+
+            canvas[padding:im_h + padding,
+                   im_w * output_idx:im_w * (output_idx + 1)] = output.reshape(im_h, im_w, im_c)
+
+        plt.xticks([])
+        plt.yticks([])
+        plt.axes().set_aspect('equal')
+        plt.axis("off")
+        plt.imshow(canvas.squeeze(), origin="upper", cmap="gray")
+        filename = "results/{}/{}_{}_{}-{}.png".format(
+            model.name, inter_type, inter_direction, input_indices[idx], direction)
+        plt.savefig(filename, bbox_inches='tight', pad_inches=0)
+        plt.close(fig)
+
+def cyclic_interpolation(
+    input_indices, sess, model, dataset, epoch,
+    show_only=False, direct=False, extrapolate=False):
+
     means_val, alphas_val, p_val = sess.run(
             [model.gausses["means"],
              model.gausses["variations"],
@@ -685,18 +847,17 @@ def cyclic_interpolation(sess, model, dataset, epoch, show_only=False, direct=Fa
     mean_diff_matrix = np.expand_dims(means_val, 0) - np.expand_dims(means_val, 1)
     im_h, im_w, im_c = dataset.image_shape
 
-    samples_num = 10
+    samples_num = len(input_indices)
     interpolation_steps = 10
     padding = 6
 
-    interpolating_samples = list(range(samples_num))
     tensor_z, probs = sess.run(
         [model.out["z"], model.out["probs"]],
-        { model.placeholders["X"]: dataset.test["X"][interpolating_samples] }
+        { model.placeholders["X"]: dataset.test["X"][input_indices] }
     )
 
 
-    for idx in interpolating_samples:
+    for idx in range(samples_num):
         fig = plt.figure(figsize=(interpolation_steps, samples_num))
 
         # label = np.argmax(dataset.test["y"][idx])
@@ -736,37 +897,35 @@ def cyclic_interpolation(sess, model, dataset, epoch, show_only=False, direct=Fa
                 canvas[start_h:start_h + im_h,
                        im_w * output_idx:im_w * (output_idx + 1)] = output.reshape(im_h, im_w, im_c)
 
+
+        inter_type = "direct" if direct else "cyclic"
+        inter_direction = "extrapolation" if extrapolate else "interpolation"
+
         plt.xticks([])
         plt.yticks([])
         plt.axes().set_aspect('equal')
         plt.axis("off")
         plt.imshow(canvas.squeeze(), origin="upper", cmap="gray")
-
-        real_label = dataset.labels_names[label]
-        pred_label = dataset.labels_names[probs[idx].argmax()]
-
-        # caption = "Label: {}    Class given by the model: {} with prob {}".format(
-        #     real_label, pred_label, round(float(probs[idx].max()), 2))
-        # plt.text(0, 0, caption)
-
-        if show_only:
-            plt.show()
-        else:
-            inter_direction = "extrapolation" if extrapolate else "interpolation"
-            inter_type = "direct" if direct else "cyclic"
-            filename = "results/{}/{}_{}_{}_{}.png".format(
-                model.name, inter_type, inter_direction, str(epoch).zfill(3), idx)
-            plt.savefig(filename, bbox_inches='tight', pad_inches=0)
+        plt.tight_layout(pad=0)
+        filename = "results/{}/{}_{}_{}_{}.png".format(
+            model.name, inter_type, inter_direction, str(epoch).zfill(3), input_indices[idx])
+        plt.savefig(filename, bbox_inches='tight', pad_inches=0)
         plt.close(fig)
 
 
-def interpolation(sess, model, dataset, epoch, show_only=False):
-    out_z=[[1,2],[3,4],[5,6],[7,8],[9,10],[11,12],[13,14],[15,16],[17,18],[19,1]]
+def interpolation(input_indices, sess, model, dataset, epoch, separate_files=False):
+    out_z = [
+        [input_indices[idx], input_indices[idx + 1]]
+        for idx in range(len(input_indices) - 1)
+    ]
+    out_z += [[input_indices[-1], input_indices[0]]]
+    out_z.reverse()
+
     # TODO: przejrzyj to
 
     n_iterations = 8
     nx = n_iterations + 2
-    ny = 10
+    ny = len(out_z)
 
     im_h, im_w, im_c = dataset.image_shape
     # im_w = 28
@@ -823,23 +982,32 @@ def interpolation(sess, model, dataset, epoch, show_only=False):
             canvas[(ny - y_idx - 1) * im_h:(ny - y_idx) * im_h,
                    x_idx * im_w:(x_idx + 1) * im_w] = d_plot.reshape(im_h, im_w, im_c)
 
-
     canvas = canvas.squeeze() # (28, 28, 1) => (28, 28)
     fig = plt.figure(figsize=(nx, ny))
 
-    plt.xticks([])
-    plt.yticks([])
-    plt.axes().set_aspect('equal')
-    plt.axis("off")
-    plt.imshow(canvas, origin="upper", cmap="gray")
-    # plt.tight_layout(pad=0)
-    if show_only:
-        plt.show()
+    if separate_files:
+        for idx in range(ny):
+            plt.xticks([])
+            plt.yticks([])
+            plt.axes().set_aspect('equal')
+            plt.axis("off")
+
+            row = canvas[idx * im_h:(idx + 1) * im_h]
+            plt.imshow(row, origin="upper", cmap="gray")
+            filename = "results/{}/interpolation_{}.png".format(
+                model.name, input_indices[idx])
+            plt.savefig(filename, bbox_inches='tight', pad_inches=0)
+            plt.close(fig)
     else:
+        plt.xticks([])
+        plt.yticks([])
+        plt.axes().set_aspect('equal')
+        plt.axis("off")
+        plt.imshow(canvas, origin="upper", cmap="gray")
         filename = "results/{}/interpolation_{}.png".format(
             model.name, str(epoch).zfill(3))
         plt.savefig(filename, bbox_inches='tight', pad_inches=0)
-    plt.close(fig)
+        plt.close(fig)
 
 
 def plot_costs(fig, costs, name):

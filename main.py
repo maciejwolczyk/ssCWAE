@@ -35,6 +35,12 @@ def prepare_directories(model_name):
     samples_dir = "results/{}/final_samples".format(model_name)
     os.makedirs(samples_dir)
 
+    samples_dir = "results/{}/final_inter_samples".format(model_name)
+    os.makedirs(samples_dir)
+
+    samples_dir = "results/{}/final_inter_gen_samples".format(model_name)
+    os.makedirs(samples_dir)
+
 def apply_bernoulli_noise(x):
      return np.random.binomial(1, p=x, size=x.shape)
 
@@ -123,11 +129,11 @@ def train_model(
     model_type = "gmmcwae"
     model_name = (
         "{}/{}/{}/{}d_erfw{}_kn{}_hd{}_bs{}_sw{}_dw{}_a{}_gw{}_init{}" +
-        "cw{}_lr{}_noneqprob_cyclic_mse_2rep").format(
+        "cw{}_lr{}_noneqprob_cyclic_mse_4rep_rng{}").format(
             dataset.name, coder.__class__.__name__, model_type,
             latent_dim, erf_weight, kernel_num, h_dim,
             batch_size, supervised_weight, distance_weight, erf_alpha,
-            gamma, init, cw_weight, learning_rate)
+            gamma, init, cw_weight, learning_rate, rng_seed)
 
     print(model_name)
     prepare_directories(model_name)
@@ -313,13 +319,14 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
             mean_diff = np.sqrt(np.sum(np.square(analytic_mean - valid_mean), axis=1))
             print("Mean diff:", mean_diff)
 
-        metrics.interpolation(sess, model, dataset, epoch_n)
+        input_indices = list(range(10))
+        metrics.interpolation(input_indices, sess, model, dataset, epoch_n)
         metrics.sample_from_classes(sess, model, dataset, epoch_n, valid_var=None)
 
         if type(model).__name__ != "CwaeModel":
             metrics.inter_class_interpolation(sess, model, dataset, epoch_n)
-            metrics.cyclic_interpolation(sess, model, dataset, epoch_n)
-            metrics.cyclic_interpolation(sess, model, dataset, epoch_n, direct=True)
+            metrics.cyclic_interpolation(input_indices, sess, model, dataset, epoch_n)
+            metrics.cyclic_interpolation(input_indices, sess, model, dataset, epoch_n, direct=True)
             # metrics.sample_from_classes(sess, model, dataset, epoch_n, valid_var)
 
     if epoch_n % 5 == 0:
@@ -329,29 +336,50 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
 
 
 def load_and_test():
+
+    # MNIST
     # weights_filename = "20d_erfw0.0_kn5_hd786_bs1000_sw10.0_dw0.0_a0.001_gw1.0_init2.0cw5.0_lr0.0003_1000l_noalpha_noneqprob_nobn_cyclic_finaltest"
     # weights_filename = "20d_erfw0.0_kn5_hd786_bs1000_sw0.0_dw0.0_a0.001_gw1.0_init2.0cw5.0_lr0.0003_100l_noalpha_noneqprob_nobn_cyclic_nowhiten_rep_1000e_dataset"
     # weights_filename = "20d_erfw0.0_kn5_hd786_bs1000_sw5.0_dw0.0_a0.001_gw1.0_init2.0cw5.0_lr0.0003_100l_noalpha_noneqprob_nobn_cyclic_nowhiten_rep_1000e_dataset"
     weights_filename = "32d_erfw0.0_kn32_hd1024_bs256_sw10.0_dw0.0_a0.001_gw1.0_init1.0cw5.0_lr0.0003_100l_noalpha_noneqprob_nobn_cyclic_nowhiten_rep_1000e_dataset"
 
     model_type = "gmmcwae"
-    model_name = "celeba_gmm_bigger_hd1024"
-    epoch_n = 500
-    dataset_name = "celeba_singletag"
+
+    dataset_name = "mnist"
+    model_name = "final_{}".format(dataset_name)
 
 
     if dataset_name == "mnist":
+        input_indices = [0, 0, 6, 9, 11, 13, 17, 17, 21, 51]
+        chosen_inters = [2, 3, 5, 3, 8, 6, 8, 4, 4, 8]
+        inter_indices = list(range(10, 20))
+
+        epoch_n = 500
+        weights_filename = (
+            "10d_erfw0.0_kn2_hd1024_bs100_sw10.0_dw0.0_a0.001"
+            + "_gw1.0_init0.1cw5.0_lr0.0003_noneqprob_cyclic_mse_rep"
+            )
         labeled_examples_num = 100
         latent_dim = 10
-        supervised_weight = 1.
+        supervised_weight = 10.
         kernel_num = 2
         learning_rate = 3e-4
         cw_weight = 5.
         batch_size = 100
-        h_dim = 786
+        h_dim = 1024
         init = 1.
 
     elif dataset_name == "svhn":
+        input_indices = [22, 35, 52, 52, 73, 73, 78, 78, 89, 99]
+        chosen_inters = [7, 2, 1, 8, 8, 5, 0, 8, 5, 3]
+        inter_indices = list(range(20, 30))
+
+
+        epoch_n = 400
+        weights_filename = (
+            "20d_erfw0.0_kn5_hd786_bs1000_sw10.0_dw0.0_a0.001_gw1.0_init2.0"
+            + "cw5.0_lr0.0003_1000l_noalpha_noneqprob_nobn_cyclic_finaltest"
+            )
         labeled_examples_num = 1000
         latent_dim = 20
         learning_rate = 3e-4
@@ -363,6 +391,15 @@ def load_and_test():
         init = 2.
 
     elif dataset_name == "celeba_multitag" or dataset_name == "celeba_singletag":
+        input_indices = [5, 7, 48, 54, 79, 96]
+        chosen_inters = [1, 3, 1, 2, 0, 3]
+        inter_indices = list(range(90, 100))
+
+        epoch_n = 500
+        weights_filename = (
+            "32d_erfw0.0_kn32_hd1024_bs256_sw10.0_dw0.0_a0.001_gw1.0_init1.0cw5.0"
+            + "_lr0.0003_100l_noalpha_noneqprob_nobn_cyclic_nowhiten_rep_1000e_dataset"
+            )
         labeled_examples_num = 1000
         latent_dim = 32
         learning_rate = 3e-4
@@ -379,7 +416,7 @@ def load_and_test():
         number_to_keep=labeled_examples_num,
         keep_labels_proportions=True, batch_size=100)
 
-    
+
     if dataset_name == "celeba_multitag" or dataset_name == "celeba_singletag":
         coder = architecture.CelebaCoder(
             dataset, kernel_num=kernel_num, h_dim=h_dim)
@@ -406,20 +443,61 @@ def load_and_test():
 
 
     weights_path = "results/{}/{}/{}/{}/epoch={}.ckpt".format(
-            dataset.name, coder.__class__.__name__, model_type, weights_filename, epoch_n) 
-    
+            dataset.name, coder.__class__.__name__, model_type, weights_filename, epoch_n)
+
     with tf.Session(config=frugal_config) as sess:
+
         sess.run(tf.global_variables_initializer())
         model.saver.restore(sess, weights_path)
-        metrics.interpolation(sess, model, dataset, "")
-        # metrics.inter_class_interpolation(sess, model, dataset, "")
-        metrics.sample_from_classes(sess, model, dataset, "", valid_var=None)
-        metrics.save_samples(sess, model, dataset, 10000)
+        metrics.save_interpolation_samples(
+            sess, model, dataset, 10000, from_dataset=False)
+        metrics.save_interpolation_samples(
+            sess, model, dataset, 10000, from_dataset=True)
 
-        if model_type != "onecwae":
-            metrics.cyclic_interpolation(sess, model, dataset, "")
-            metrics.cyclic_interpolation(sess, model, dataset, "", extrapolate=True)
-            metrics.cyclic_interpolation(sess, model, dataset, "", direct=True)
+
+        # if True:
+        #     metrics.chosen_class_interpolation(
+        #         input_indices, sess, model, dataset, 0, chosen_inters=chosen_inters)
+        #     metrics.interpolation(
+        #         inter_indices, sess, model, dataset, 0, separate_files=True)
+        #     if dataset.name == "celeba_singletag":
+        #         input_indices = [13, 53, 59, 75, 97, 98, 99]
+        #         chosen_inters = [1, 3, 1, 0, 1, 3, 1]
+        #         metrics.chosen_class_interpolation(
+        #             input_indices, sess, model, dataset, 0, chosen_inters=chosen_inters, extrapolate=True)
+        #     return
+
+
+        # test_metrics, _, _ = metrics.evaluate_gmmcwae(
+        #     sess, model, dataset.test,
+        #     0, dataset, filename_prefix="test",
+        #     subset=None)
+
+        # for sample_set_idx in range(10):
+        #     start_idx = sample_set_idx * 10
+        #     input_indices = list(range(start_idx, start_idx + 10))
+
+        #     metrics.interpolation(
+        #         input_indices, sess, model, dataset, str(sample_set_idx))
+        #     metrics.sample_from_classes(
+        #         sess, model, dataset, str(sample_set_idx), valid_var=None)
+        #     metrics.reconstruction(
+        #         input_indices, sess, model, dataset, str(sample_set_idx))
+
+        #     if model_type != "onecwae":
+        #         metrics.cyclic_interpolation(
+        #             input_indices, sess, model, dataset, 0)
+        #         metrics.cyclic_interpolation(
+        #             input_indices, sess, model, dataset, 0,
+        #             extrapolate=True)
+        #         metrics.cyclic_interpolation(
+        #             input_indices, sess, model, dataset, 0,
+        #             direct=True)
+        #         metrics.cyclic_interpolation(
+        #             input_indices, sess, model, dataset, 0,
+        #             direct=True, extrapolate=True)
+
+
 
 def grid_train():
     dataset_name = "mnist"
@@ -499,7 +577,7 @@ def grid_train():
     elif dataset_name == "mnist":
         latent_dims = [10]
         distance_weights = [0.]
-        supervised_weights = [0.]
+        supervised_weights = [10.]
         kernel_nums = [2]
 
         learning_rates = [3e-4]
@@ -514,7 +592,9 @@ def grid_train():
         cc_eps = [0.0]
         # labeled_super_weights = [1.0]
         labeled_super_weights = [0.]
-        rng_seeds = [25]
+        # rng_seeds = [25]
+        rng_seeds = list(range(10, 20))
+
         erf_weights = [0.]
         alphas = [1e-3]
 
@@ -534,5 +614,4 @@ def grid_train():
         # print(h.heap())
 
 if __name__ == "__main__":
-    grid_train()
-
+    load_and_test()
