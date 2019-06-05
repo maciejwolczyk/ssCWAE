@@ -75,12 +75,16 @@ def draw_gmm(
     else:
         plt.savefig(filename, bbox_inches='tight')
         plt.close(fig)
+    plt.close()
 
 
 def evaluate_model(
         sess, model, valid_set, epoch, dataset,
         filename_prefix="test", subset=None,
         class_in_sum=True, training_mode=False):
+
+    if len(valid_set["X"]) == 0:
+        return None, None
 
     means_val, alphas_val, p_val = sess.run(
             [model.gausses["means"],
@@ -153,7 +157,8 @@ def evaluate_model(
 
     rand_score = adjusted_rand_score(valid_set["y"].argmax(-1), preds)
     metrics_final["rand_score"] = rand_score
-    metrics_final["nmi"] = normalized_mutual_info_score(valid_set["y"].argmax(-1), preds)
+    metrics_final["nmi"] = normalized_mutual_info_score(
+        valid_set["y"].argmax(-1), preds, average_method="geometric")
 
     # PCA
     if epoch % 5 == 0:
@@ -236,6 +241,7 @@ def sample_from_classes(sess, model, dataset, epoch, valid_var=None, show_only=F
             filename = "results/{}/sampling_{}.png".format(
                     model.name, str(epoch).zfill(3))
         plt.savefig(filename, bbox_inches='tight', pad_inches=0)
+    plt.close()
 
 def inter_class_interpolation(sess, model, dataset, epoch, show_only=False):
     pass
@@ -300,6 +306,7 @@ def interpolation(sess, model, dataset, epoch, show_only=False):
         filename = "results/{}/interpolation_{}.png".format(
             model.name, str(epoch).zfill(3))
         plt.savefig(filename, bbox_inches='tight', pad_inches=0)
+    plt.close()
 
 
 def plot_costs(fig, costs, name):

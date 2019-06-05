@@ -134,14 +134,16 @@ def train_model(
 
     dataset.load_links(links_num)
 
-    coder = architecture.WideShaoCoder(
-            dataset, h_dim=h_dim,
-            kernel_size=3,
-            kernel_num=kernel_num)
+    # coder = architecture.WideShaoCoder(
+    #         dataset, h_dim=h_dim,
+    #         kernel_size=3,
+    #         kernel_num=kernel_num)
+
+    coder = architecture.FCCoder(dataset, h_dim=h_dim)
 
     model_name = (
-        "{}/{}/{}d_cwdist_dw{}_kn{}_hd{}_bs{}_sw{}" +
-        "_{}links_nolinks15_e25_nonorm_rng{}").format(
+        "links/{}/{}/{}d_cwdist_dw{}_kn{}_hd{}_bs{}_sw{}" +
+        "_{}links_nolinks0_e25_yesnorm_rng{}").format(
             dataset.name, coder.__class__.__name__, latent_dim,
             distance_weight, kernel_num, h_dim,
             batch_size, supervised_weight, links_num, rng_seed)
@@ -163,7 +165,7 @@ def train_model(
 
 
 def run_training(model, dataset, batch_size):
-    n_epochs = 150
+    n_epochs = 250
     with tf.Session(config=frugal_config) as sess:
         sess.run(tf.global_variables_initializer())
         costs = []
@@ -185,9 +187,9 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
     # dataset.unlabeled_train if not links
 
     for batch_idx in trange(batches_num, leave=False):
-        # TODO: linki dopiero po 10 epokach
 
-        dummy_links = epoch_n < 15
+        # TODO: linki dopiero po 10 epokach
+        dummy_links = epoch_n < 0
         X_batch, y_batch, must_link, cannot_link = get_links_batch(
                 batch_idx, batch_size, dataset, dummy_links)
         if dataset.name == "mnist" and False:
@@ -270,18 +272,18 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
     return valid_metrics, test_metrics
 
 if __name__ == "__main__":
-    latent_dims = [256]
-    distance_weights = [100.]
-    supervised_weights = [5.]
+    latent_dims = [10, 20]
+    distance_weights = [0.]
+    supervised_weights = [1., 5.]
     kernel_nums = [16, 32]
     batch_sizes = [200]
-    hidden_dims = [64, 128]
+    hidden_dims = [256, 512, 786]
     gammas = [1.0]
     inits = [0.1]
     rng_seeds = [21]
     erf_weights = [0.]
     alphas = [1e-6]
-    links_nums = [100, 500, 1000]
+    links_nums = [0, 100, 500, 1000]
 
     for hyperparams in itertools.product(
             latent_dims, kernel_nums, distance_weights,

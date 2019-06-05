@@ -163,3 +163,19 @@ x + 1) Wrzucamy wszystkie polabelowane do latent space i liczymy średnie żeby 
 
 2018-11-28
 1) Odległość w erfie trzeba dzielić przez liczbę wymiarów, inaczej jest równa zero. Mądrzejszy sposób normalizacji?
+
+
+2019-06-04
+batch_size - mniej linków niż batchów, sensowna proporcja (jak?)
+batch_size - im większy tym lepiej?
+
+Sposób działania:
+1) autoencoder pre-training
+2) CWAE bez linków
+3) Dodajemy linki
+4) Rozpychamy (wyłączając linki/mniejszy koszt rozpychania?)
+
+TODO:
+- rand index na wykresie
+- CelebA 4 klasy, MNIST (10 klas i 4 klasy)
+- GMM zamiast na twardo (czekaj na overleafa)

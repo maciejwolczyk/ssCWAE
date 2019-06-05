@@ -42,7 +42,7 @@ class CwaeModel():
         self, name, coder, dataset, latent_dim=300,
         supervised_weight=1.0, distance_weight=1.0,
         erf_weight=1.0, erf_alpha=0.05,
-        optimizer=tft.AdamOptimizer(1e-3),
+        optimizer=tft.AdamOptimizer(3e-4),
         eps=1e-2, init=1.0, gamma=1.0):
 
         tf.reset_default_graph()
@@ -439,7 +439,7 @@ class CwaeModel():
         labels = tf.eye(dataset.classes_num)
         labeled_num = tf.reduce_sum(tf.cast(labeled_mask, tf.float32))
 
-        class_normalization = False
+        class_normalization = True
         if class_normalization:
             cwae_sum = tf.nn.softmax_cross_entropy_with_logits_v2(
                     labels=tf.eye(dataset.classes_num), logits=logits)

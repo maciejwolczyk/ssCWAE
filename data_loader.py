@@ -65,6 +65,11 @@ class Dataset:
         return self.pca.inverse_transform(X)
 
     def load_links(self, pairs_num):
+        if pairs_num == 0:
+            self.links = np.array([])
+            self.semi_labeled_train = {"X": [], "y": []}
+            return
+
         pair_indices = self.rng.choice(
             self.train_examples_num, size=(10000, 2), replace=True)
         pair_indices = pair_indices[:pairs_num]
