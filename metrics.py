@@ -36,21 +36,27 @@ def draw_gmm(
         plt.scatter(unlabeled_z[:, 0], unlabeled_z[:, 1], c="gray")
 
     c = color_arr[np.argmax(y, axis=1)[:len(labeled_z)]]
+    
     plt.scatter(labeled_z[:, 0], labeled_z[:, 1], c=c)
 
+    # TODO: nie rysujemy meanow
     if means is not None:
         gaussians_per_class = max(len(means) // dataset.classes_num, 1)
         for i in range(len(means)):
             c = color_arr[i // gaussians_per_class]
-            circle = plt.Circle(
-                    means[i], alpha[i],
-                    color=c, fill=False, linewidth=p[i] * 30)
-            ax.add_artist(circle)
+            # circle = plt.Circle(
+            #         means[i], alpha[i],
+            #         color=c, fill=False, linewidth=p[i] * 30)
+            # ax.add_artist(circle)
             if i % gaussians_per_class == 0:
-                plt.scatter(means[i, 0], means[i, 1],
-                        s=0 + (p[i] * alpha[i] * 1000),
-                        c=c, label=dataset.labels_names[i // gaussians_per_class],
-                        marker="^")
+                # plt.scatter(means[i, 0], means[i, 1],
+                #         s=0 + (p[i] * alpha[i] * 1000),
+                #         c=c, label=dataset.labels_names[i // gaussians_per_class],
+                #         marker="^")
+                plt.scatter(
+                    means[i, 0], means[i, 1], c=c,
+                    label=dataset.labels_names[i // gaussians_per_class]
+                    )
             else:
                 plt.scatter(means[i, 0], means[i, 1],
                         s=0 + (p[i] * alpha[i] * 1000),

@@ -208,7 +208,7 @@ class DeepGmmModel():
             tensor_z, means, variances, probs, gamma, weighted=False)
         full_cw_cost = tf.log(full_cw_cost)
 
-        if dataset.name == "mnist":
+        if dataset.name == "mnist" and False:
             rec_cost = tensor_x * tf.log(tensor_y + 1e-8) + (1 - tensor_x) * tf.log(1 - tensor_y + 1e-8)
             rec_cost = -tf.reduce_sum(rec_cost, axis=-1)
         else:
@@ -643,7 +643,7 @@ class GmmCwaeModel():
         cpd_cost = gmm_conditionally_positive_distance(unsupervised_tensor_z, means, z_dim)
         # log_cw_cost = cpd_cost
 
-        if dataset.name == "mnist" and False:
+        if dataset.name == "mnist":
             rec_cost = tensor_x * tf.log(tensor_y + 1e-8) + (1 - tensor_x) * tf.log(1 - tensor_y + 1e-8)
             rec_cost = -tf.reduce_sum(rec_cost, axis=-1)
         else:
@@ -1280,9 +1280,9 @@ def phi(x):
     a = 7.5
     return phi_f(tf.minimum(x, a)) - phi_f(a) + phi_g(tf.maximum(x, a))
 
-
 def phi_d(s, D):
-    if D == 2:
+    # TODO: usun
+    if D == 2 and False:
         return phi(s)
     else:
         return 1 / tf.sqrt(1 + (4 * s) / (2 * D - 3))
@@ -1315,10 +1315,14 @@ def get_global_std(tensor_z, means, variances, probs, classes_num):
 def get_gaussians(z_dim, init, dataset, gauss_num):
     G = gauss_num
     with tf.variable_scope("gmm", reuse=False):
-        one_hot = np.zeros([G, z_dim])
-        one_hot[np.arange(z_dim) % G, np.arange(z_dim)] = 1
-        one_hot *= init / z_dim * G
-        one_hot += np.random.normal(0, .001, size=one_hot.shape)
+
+        if G <= z_dim:
+            one_hot = np.zeros([G, z_dim])
+            one_hot[np.arange(z_dim) % G, np.arange(z_dim)] = 1
+            one_hot *= init / z_dim * G
+            one_hot += np.random.normal(0, .001, size=one_hot.shape)
+        else:
+            one_hot = np.random.normal(0, init, size=(G, z_dim))
         # TODO: means = tf.constant()
 
 

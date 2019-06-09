@@ -137,6 +137,7 @@ class Dataset:
         labels = np.copy(self.train["y"])
         labels_props = self.train["y"].sum(0) / self.train["y"].sum()
         print("Labels len", len(labels), "shape", labels.shape, "Props", labels_props)
+        labels_props = np.array([1 / self.classes_num] * self.classes_num)
 
         if keep_labels_proportions:
             argmax_labels = labels.argmax(-1).squeeze()
