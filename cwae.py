@@ -643,7 +643,7 @@ class GmmCwaeModel():
         cpd_cost = gmm_conditionally_positive_distance(unsupervised_tensor_z, means, z_dim)
         # log_cw_cost = cpd_cost
 
-        if dataset.name == "mnist":
+        if dataset.name == "mnist" and False:
             rec_cost = tensor_x * tf.log(tensor_y + 1e-8) + (1 - tensor_x) * tf.log(1 - tensor_y + 1e-8)
             rec_cost = -tf.reduce_sum(rec_cost, axis=-1)
         else:
@@ -729,7 +729,6 @@ class GmmCwaeModel():
                 + tensor_supervised_weight * cec_cost)
 
         full_cec_erf_cost = tf.reduce_mean(
-
                 rec_cost
                 + tensor_distance_weight * distance_cost
                 + tensor_supervised_weight * cec_cost
@@ -1431,8 +1430,9 @@ def calculate_softmax_logits(tensor_z, means, alpha, p):
     return class_logits
 
 def calculate_logits(tensor_z, means, alpha, p):
+    D = tf.cast(tf.shape(means)[-1], tf.float32)
     class_logits = -norm_squared(tf.expand_dims(tensor_z, 1) - tf.expand_dims(means, 0), axis=-1) / (2 * alpha)
-    class_logits = tf.log(p) - 0.5 * tf.log(2 * pi * alpha) + class_logits
+    class_logits = tf.log(p) - 0.5 * D * tf.log(2 * pi * alpha) + class_logits
     return class_logits
 
 # TODO: to nie dziala chyba. Poprawic.

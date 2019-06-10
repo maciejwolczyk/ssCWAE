@@ -132,7 +132,7 @@ def train_model(
     model_type = "gmmcwae"
     model_name = (
         "{}/{}/{}/{}d_erfw{}_kn{}_hd{}_bs{}_sw{}_dw{}_a{}_gw{}_init{}" +
-        "cw{}_lr{}_eqprob_cyclic_mse_4rep_rng{}_differentphi").format(
+        "cw{}_lr{}_noneqprob_cyclic_realmse_4rep_rng{}_newlog").format(
             dataset.name, coder.__class__.__name__, model_type,
             latent_dim, erf_weight, kernel_num, h_dim,
             batch_size, supervised_weight, distance_weight, erf_alpha,
@@ -347,7 +347,7 @@ def load_and_test():
     model_type = "gmmcwae"
 
     dataset_name = "celeba_singletag"
-    model_name = "exporting_{}".format(dataset_name)
+    model_name = "final_{}".format(dataset_name)
 
 
     if dataset_name == "mnist":
@@ -453,63 +453,67 @@ def load_and_test():
         sess.run(tf.global_variables_initializer())
         model.saver.restore(sess, weights_path)
 
-        
-        exports_dir = "results/{}/exports".format(model_name)
-        builder = tf.saved_model.Builder(exports_dir)
-        
-        print(model.gausses["means"], type(model.gausses["means"]))
-        print(model.gausses["means"].op)
+        if False:
+            exports_dir = "results/{}/exports".format(model_name)
+            builder = tf.saved_model.Builder(exports_dir)
 
-        input_x = tf.saved_model.build_tensor_info(model.placeholders["X"])
-        output_z = tf.saved_model.build_tensor_info(model.out["z"])
-        means = tf.saved_model.build_tensor_info(model.gausses["means"])
-        encoder_signature = tf.saved_model.build_signature_def(
-            inputs={"input_x": input_x},
-            outputs={"output_z": output_z, "means": means},
-            method_name="encoder_sig"
-        )
+            print(model.gausses["means"], type(model.gausses["means"]))
+            print(model.gausses["means"].op)
 
-        
-
-        input_z = tf.saved_model.build_tensor_info(model.out["z"])
-        output_y = tf.saved_model.build_tensor_info(model.out["y"])
-        decoder_signature = tf.saved_model.build_signature_def(
-            inputs={"input_z": input_z},
-            outputs={"reconstruction": output_y},
-            method_name="decoder_sig"
-        )
+            input_x = tf.saved_model.build_tensor_info(model.placeholders["X"])
+            output_z = tf.saved_model.build_tensor_info(model.out["z"])
+            means = tf.saved_model.build_tensor_info(model.gausses["means"])
+            encoder_signature = tf.saved_model.build_signature_def(
+                inputs={"input_x": input_x},
+                outputs={"output_z": output_z, "means": means},
+                method_name="encoder_sig"
+            )
 
 
-        signature_def_map = {
-            "serving_default": encoder_signature,
-            "encoder_sig": encoder_signature,
-            "decoder_sig": decoder_signature
-            }
 
-        builder.add_meta_graph_and_variables(
-            sess, ["serve"], signature_def_map=signature_def_map
-        )
-        builder.save()
-
-        return 
-
-        metrics.save_interpolation_samples(
-            sess, model, dataset, 10000, from_dataset=False)
-        metrics.save_interpolation_samples(
-            sess, model, dataset, 10000, from_dataset=True)
+            input_z = tf.saved_model.build_tensor_info(model.out["z"])
+            output_y = tf.saved_model.build_tensor_info(model.out["y"])
+            decoder_signature = tf.saved_model.build_signature_def(
+                inputs={"input_z": input_z},
+                outputs={"reconstruction": output_y},
+                method_name="decoder_sig"
+            )
 
 
-        # if True:
-        #     metrics.chosen_class_interpolation(
-        #         input_indices, sess, model, dataset, 0, chosen_inters=chosen_inters)
-        #     metrics.interpolation(
-        #         inter_indices, sess, model, dataset, 0, separate_files=True)
-        #     if dataset.name == "celeba_singletag":
-        #         input_indices = [13, 53, 59, 75, 97, 98, 99]
-        #         chosen_inters = [1, 3, 1, 0, 1, 3, 1]
-        #         metrics.chosen_class_interpolation(
-        #             input_indices, sess, model, dataset, 0, chosen_inters=chosen_inters, extrapolate=True)
-        #     return
+            signature_def_map = {
+                "serving_default": encoder_signature,
+                "encoder_sig": encoder_signature,
+                "decoder_sig": decoder_signature
+                }
+
+            builder.add_meta_graph_and_variables(
+                sess, ["serve"], signature_def_map=signature_def_map
+            )
+            builder.save()
+
+            return
+
+        # metrics.save_interpolation_samples(
+        #     sess, model, dataset, 10000, from_dataset=False)
+        # metrics.save_interpolation_samples(
+        #     sess, model, dataset, 10000, from_dataset=True)
+
+
+        if True:
+            metrics.chosen_class_interpolation(
+                input_indices, sess, model, dataset, 0, chosen_inters=chosen_inters)
+            metrics.interpolation(
+                inter_indices, sess, model, dataset, 0, separate_files=True)
+            if dataset.name == "celeba_singletag":
+                input_indices = []
+                chosen_inters = []
+                for idx in range(100, 200):
+                    input_indices += [idx, idx, idx, idx]
+                    chosen_inters += [0, 1, 2, 3]
+
+                metrics.chosen_class_interpolation(
+                    input_indices, sess, model, dataset, 0, chosen_inters=chosen_inters, extrapolate=True)
+            return
 
 
         # test_metrics, _, _ = metrics.evaluate_gmmcwae(
@@ -619,24 +623,24 @@ def grid_train():
         alphas = [1e-3]
 
     elif dataset_name == "mnist":
-        latent_dims = [5]
+        latent_dims = [10]
         distance_weights = [0.]
-        supervised_weights = [5.]
-        kernel_nums = [2, 4, 6]
+        supervised_weights = [0.]
+        kernel_nums = [2, 4]
 
         learning_rates = [3e-4]
-        cw_weights = [2.]
+        cw_weights = [5.]
         # dla bs=200 tez spoko dziala
         batch_sizes = [100]
-        hidden_dims = [128, 256, 512]
+        hidden_dims = [1024]
         gammas = [1.0]
 
         # init nie ma wiekszego znaczenia chyba
-        inits = [1.]
+        inits = [0.1]
         cc_eps = [0.0]
         # labeled_super_weights = [1.0]
         labeled_super_weights = [0.]
-        rng_seeds = [25]
+        rng_seeds = [26]
         # rng_seeds = list(range(10, 20))
 
         erf_weights = [0.]
@@ -658,4 +662,4 @@ def grid_train():
         # print(h.heap())
 
 if __name__ == "__main__":
-    grid_train()
+    load_and_test()
