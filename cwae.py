@@ -41,9 +41,8 @@ class CwaeModel():
     def __init__(
         self, name, coder, dataset, latent_dim=300,
         supervised_weight=1.0, distance_weight=1.0,
-        erf_weight=1.0, erf_alpha=0.05,
-        optimizer=tft.AdamOptimizer(3e-4),
-        eps=1e-2, init=1.0, gamma=1.0):
+        erf_weight=1.0, erf_alpha=0.05, cw_weight=1.0,
+        eps=1e-2, init=1.0, gamma=1.0, learning_rate=3e-4):
 
         tf.reset_default_graph()
         self.name = name
@@ -51,7 +50,7 @@ class CwaeModel():
         self.gamma = gamma
         gamma_weight = gamma
         self.coder = coder
-        self.optimizer = optimizer
+        self.optimizer = tft.AdamOptimizer(learning_rate)
 
         im_h, im_w, im_c = dataset.image_shape
         x_dim = dataset.x_dim
@@ -63,7 +62,7 @@ class CwaeModel():
                 shape=[None, x_dim],
                 dtype=tf.float32, name='input_x')
         tensor_labels = tf.placeholder_with_default(
-                [[0.] * 10],
+                [[0.] * dataset.classes_num],
                 shape=[None, dataset.classes_num],
                 name='target_y')
         tensor_x_target = tf.placeholder(
@@ -79,7 +78,6 @@ class CwaeModel():
         labeled_mask = tf.logical_or(must_link_mask, cannot_link_mask)
 
         examples_num = tf.shape(tensor_x)[0]
-
 
         # Coder and decoder
         tensor_z = coder.encode(tensor_x, z_dim, tensor_training)
@@ -97,6 +95,7 @@ class CwaeModel():
         default_gamma = get_empirical_gamma(
                 unsupervised_tensor_z, means, variances, probs, dataset.classes_num)
         tensor_gamma = tf.placeholder_with_default(default_gamma, shape=[])
+        self.gamma_weight = gamma_weight
         self.gamma = tensor_gamma * gamma_weight
 
         class_logits = calculate_logits(tensor_z, means, variances, probs)
@@ -110,6 +109,7 @@ class CwaeModel():
         cannot_logits = tf.reshape(cannot_logits, (-1, 2, dataset.classes_num))
         cannot_link_labels, cannot_link_probs = self.get_cannot_link_labels(cannot_logits, dataset.classes_num)
 
+
         zero_labels = tf.zeros_like(tf.boolean_mask(labeled_mask, tf.logical_not(labeled_mask)))
         zero_labels = tf.cast(zero_labels, tf.int64)
         link_labels = (zero_labels, must_link_labels, cannot_link_labels)
@@ -118,6 +118,38 @@ class CwaeModel():
         link_labels = tf.one_hot(link_labels, dataset.classes_num)
         # link_labels = tf.Print(link_labels, [link_labels[100:]], "### labels", summarize=1000)
         link_labels = tf.cast(link_labels, tf.float32)
+
+        must_probs = tf.nn.softmax(must_logits)
+        must_link_sum = self.get_must_link_probs(must_probs)
+        # TODO: wypisz?
+        cannot_probs = tf.nn.softmax(cannot_logits)
+        cannot_link_sum = 1 - self.get_must_link_probs(cannot_probs)
+
+        link_cost_type = "cross-entropy"
+        if link_cost_type == "cross-entropy":
+            must_logs = tf.log(must_link_sum + 1e-8)
+            cannot_logs = tf.log(cannot_link_sum + 1e-8)
+            link_cost = -tf.reduce_mean(tf.concat((must_logs, cannot_logs), 0))
+        elif link_cost_type == "divergence":
+
+            full_must_kl = calculate_symmetric_kl(must_logits)
+            full_cannot_kl = calculate_symmetric_kl(cannot_logits)
+
+            link_cost = tf.log(full_must_kl + 1e-8) - tf.log(full_cannot_kl + 1e-8)
+
+        elif link_cost_type == "l2_loss":
+            first_must_probs = tf.nn.softmax(tf.gather(must_logits, 0, axis=1))
+            second_must_probs = tf.nn.softmax(tf.gather(must_logits, 1, axis=1))
+
+            must_l2 = tf.reduce_mean(tf.square(first_must_probs - second_must_probs))
+
+            first_cannot_probs = tf.nn.softmax(tf.gather(cannot_logits, 0, axis=1))
+            second_cannot_probs = tf.nn.softmax(tf.gather(cannot_logits, 1, axis=1))
+
+            cannot_l2 = tf.reduce_mean(tf.square(first_cannot_probs - second_cannot_probs))
+            link_cost = must_l2 - cannot_l2
+        else:
+            raise ValueError
 
         N0 = tf.cast(tf.shape(tensor_x)[0], tf.float32)
         gamma = tf.pow(4 / (3 * N0 / dataset.classes_num), 0.4)
@@ -180,25 +212,42 @@ class CwaeModel():
         # class_cost = self.single_class_cross_entropy(
         #     class_logits, tensor_labels, labeled_mask)
 
+        gmm_cost = self.gmm_clustering_cost(
+            tensor_z, class_probs, dataset,
+            means, variances, probs)
 
         link_mle_cost = -tf.reduce_mean(
             tf.concat((must_link_probs, cannot_link_probs), 0))
-        erf_cost = self.total_erf(means, probs, alpha=erf_alpha)
+        erf_cost = self.total_erf(
+            means, probs, alpha=erf_alpha, classes_num=dataset.classes_num)
 
-        distance_cost = cw_distance_penalty(
+        distance_cost = linear_distance_penalty(
                 z_dim, means, variances, probs, dataset.classes_num, gamma)
         # l2_means_cost = 0.0 * tensor_distance_weight * tf.reduce_mean(tf.sqrt(norm_squared(means)))
         # distance_cost = distance_cost + l2_means_cost
 
         # unsupervised_cost = tf.reduce_mean(reconstruction_error + log_dkl_cost)
+
         unsupervised_cost = tf.reduce_mean(
                 rec_cost
-                + log_cw_cost
+                + cw_weight * log_cw_cost
                 + tensor_distance_weight * distance_cost)
+
+        full_gmm_cost = tf.reduce_mean(
+                rec_cost
+                + cw_weight * gmm_cost
+                + tensor_distance_weight * distance_cost
+                )
+
+        full_link_cost = tf.reduce_mean(
+                rec_cost
+                + cw_weight * log_cw_cost
+                + tensor_supervised_weight * link_cost
+            )
 
         full_cost = tf.reduce_mean(
                 rec_cost
-                + log_cw_cost
+                + cw_weight * log_cw_cost
                 + tensor_supervised_weight * class_cost
                 + tensor_distance_weight * distance_cost)
 
@@ -224,17 +273,34 @@ class CwaeModel():
                 or "gmm_betas" in var.name]
 
         # Prepare various train ops
-        train_op = optimizer.minimize(full_cost)
-        freeze_train_op = optimizer.minimize(full_cost, var_list=freeze_vars)
-        means_train_op = optimizer.minimize(link_mle_cost, var_list=means_vars)
+        train_op = self.optimizer.minimize(full_cost)
+        freeze_train_op = self.optimizer.minimize(full_cost, var_list=freeze_vars)
+        means_train_op = self.optimizer.minimize(link_mle_cost, var_list=means_vars)
 
-        rec_train_op = optimizer.minimize(rec_cost)
-        rec_dkl_train_op = optimizer.minimize(rec_cost + log_cw_cost)
-        supervised_train_op = optimizer.minimize(
+
+
+
+        rec_train_op = self.optimizer.minimize(rec_cost)
+        rec_dkl_train_op = self.optimizer.minimize(rec_cost + log_cw_cost)
+        supervised_train_op = self.optimizer.minimize(
             class_cost + distance_cost * tensor_distance_weight)
 
-        full_cec_train_op = optimizer.minimize(full_cec_cost)
-        full_cec_erf_train_op = optimizer.minimize(full_cec_erf_cost)
+        unsupervised_train_op = self.optimizer.minimize(unsupervised_cost)
+        unsupervised_frozen_train_op = self.optimizer.minimize(
+            unsupervised_cost, var_list=freeze_vars)
+        unsupervised_means_only_train_op = self.optimizer.minimize(
+            unsupervised_cost, var_list=means_vars)
+
+        full_link_train_op = self.optimizer.minimize(full_link_cost)
+        full_link_frozen_train_op = self.optimizer.minimize(
+            full_link_cost, var_list=freeze_vars)
+        full_link_means_only_train_op = self.optimizer.minimize(
+            full_link_cost, var_list=means_vars)
+
+
+        full_gmm_train_op = self.optimizer.minimize(full_gmm_cost)
+        full_cec_train_op = self.optimizer.minimize(full_cec_cost)
+        full_cec_erf_train_op = self.optimizer.minimize(full_cec_erf_cost)
 
         # Prepare variables for outside use
         self.z_dim = z_dim
@@ -251,18 +317,21 @@ class CwaeModel():
             "training": tensor_training,
             "gamma": tensor_gamma,
             "must_link": must_link_mask,
-            "cannot_link": cannot_link_mask}
+            "cannot_link": cannot_link_mask
+        }
 
         self.out = {
             "logits": class_logits,
             "probs": class_probs,
             "z": tensor_z,
-            "y": tensor_y}
+            "y": tensor_y
+        }
 
         self.gausses = {
             "means": means,
             "variations": variances,
-            "probs": probs}
+            "probs": probs
+        }
 
         self.costs = {
             "class": class_cost,
@@ -271,8 +340,11 @@ class CwaeModel():
             "distance": distance_cost,
             "cec": cec_cost,
             "erf": erf_cost,
+            "link": link_cost,
             "full": full_cost,
-            "unsupervised": unsupervised_cost}
+            "unsupervised": unsupervised_cost,
+            "full_link": full_link_cost
+        }
 
         self.train_ops = {
             "full": train_op,
@@ -281,8 +353,18 @@ class CwaeModel():
             "rec": rec_train_op,
             "means_only": means_train_op,
             "rec_dkl": rec_dkl_train_op,
+            "full_gmm": full_gmm_train_op,
             "full_cec": full_cec_train_op,
-            "full_cec_erf": full_cec_erf_train_op}
+            "full_cec_erf": full_cec_erf_train_op,
+
+            "unsupervised": unsupervised_train_op,
+            "unsupervised_frozen": unsupervised_frozen_train_op,
+            "unsupervised_means_only": unsupervised_means_only_train_op,
+
+            "full_link": full_link_train_op,
+            "full_link_frozen": full_link_frozen_train_op,
+            "full_link_means_only": full_link_means_only_train_op
+        }
 
         self.train_op = train_op
         self.freeze_train_op = freeze_train_op
@@ -297,10 +379,18 @@ class CwaeModel():
         labels_mask = tf.cast(labels_mask, tf.float32)
         return labels_mask
 
+    def get_must_link_probs(self, probs):
+        """Get must link probs
+            probs: [link_num, 2, class_num]
+        """
+        pair_labels = tf.reduce_prod(probs, 1) # [link_num, class_num]
+        pair_labels = tf.reduce_sum(probs, 1) # [link_num]
+        return pair_labels
+
 
     def get_must_link_labels(self, probs):
+        # TODO: logits
         """Get most probable labels for given logits.
-
             probs: [link_num, 2, class_num]
         """
         pair_labels = tf.reduce_sum(probs, 1)  # [link_num, class_num]
@@ -371,6 +461,54 @@ class CwaeModel():
                 total += self.pairwise_erf(
                     first_mean, first_prob, second_mean, second_prob, alpha)
         return total / (classes_num * (classes_num - 1))
+
+    def gmm_clustering_cost(self,
+            tensor_z, class_probs, dataset,
+            means, variances, probs):
+
+        D = tf.cast(tf.shape(tensor_z)[-1], tf.float32)
+        N0 = tf.cast(tf.shape(tensor_z)[0], tf.float32)
+        gamma = tf.pow(4 / (3 * N0 / dataset.classes_num), 0.4) * self.gamma_weight
+
+        # shape: [data_points, class_num]
+        kde_weights = tf.transpose(class_probs, [1, 0])
+        # shape: [class_num, data_points]
+        Z = tf.expand_dims(tf.reduce_sum(kde_weights, 1), 1)
+        kde_weights = kde_weights / Z
+        # kde_weights = tf.Print(kde_weights, [tf.reduce_sum(kde_weights, 1)])
+
+        class_costs = []
+
+        # TODO: sprawdz jeszcze trzykroć
+        # TODO: da sie przyspieszyc
+        z_matrix = tf.expand_dims(tensor_z, 1) - tf.expand_dims(tensor_z, 0)
+        for class_idx in range(dataset.classes_num):
+            
+            kde_weights_matrix = (
+                tf.expand_dims(kde_weights[class_idx], 0)
+                * tf.expand_dims(kde_weights[class_idx], 1)
+            ) # [N, N]
+
+            sample_cost = norm_squared(z_matrix) / (4 * gamma)
+            sample_cost = phi_d(sample_cost, D) * kde_weights_matrix
+            sample_cost = tf.reduce_sum(sample_cost)
+            sample_cost *= 1 / tf.sqrt(4 * pi * gamma)
+
+            mean_dist = norm_squared(tensor_z - tf.expand_dims(means[class_idx], 0))
+            mean_dist /= (2 * variances[class_idx] + 4 * gamma)
+
+            dist_cost = phi_d(mean_dist, D) * kde_weights[class_idx]
+            dist_cost /= tf.sqrt(2 * pi * (variances[class_idx] + 2 * gamma))
+            dist_cost = tf.reduce_sum(dist_cost)
+
+            self_cost = 1 / (2 * tf.sqrt(pi * (variances[class_idx] + gamma)))
+
+            full_cost = tf.log(sample_cost + self_cost - 2 * dist_cost)
+            full_cost *= probs[class_idx]
+            class_costs += [full_cost]
+
+        return tf.reduce_mean(class_costs)
+
 
 
     def ceclike_class_cost(self,
@@ -658,10 +796,23 @@ def calculate_cw_logits(tensor_z, means, alpha, p, gamma):
 
 def calculate_cw_probs(tensor_z, means, alpha, p):
     logits = calculate_cw_logits(tensor_z, means, alpha, p)
+    # EXP?
     probs = logits / tf.expand_dims(tf.reduce_sum(logits, axis=1), 1)
     print(probs.shape)
     return probs
-    # C = tf.reduce_sum(C3)
+
+def calculate_symmetric_kl(logits):
+    probs = tf.nn.softmax(logits)
+    first_logits = tf.gather(logits, 0, axis=1)
+    second_logits = tf.gather(logits, 1, axis=1)
+
+    first_kl = - tf.gather(probs, 1, axis=1) * (first_logits - second_logits) # [num_links, classes_num]
+    first_kl = tf.reduce_sum(first_kl, axis=-1) # [num_links]
+
+    second_kl = - tf.gather(probs, 0, axis=1) * (second_logits - first_logits) # [num_links, classes_num]
+    second_kl = tf.reduce_sum(second_kl, axis=-1) # [num_links]
+
+    return tf.reduce_mean(first_kl) # + second_kl)
 
 def calculate_pdf_logits(tensor_z, means, alpha, p):
     m_X_sub_matrix = tf.subtract(tf.expand_dims(means, 0), tf.expand_dims(tensor_z, 1))
@@ -682,8 +833,10 @@ def calculate_softmax_logits(tensor_z, means, alpha, p):
     return class_logits
 
 def calculate_logits(tensor_z, means, alpha, p):
+    # TODO: check again!
+    D = tf.cast(tf.shape(means)[-1], tf.float32)
     class_logits = -norm_squared(tf.expand_dims(tensor_z, 1) - tf.expand_dims(means, 0), axis=-1) / (2 * alpha)
-    class_logits = tf.log(p) - 0.5 * tf.log(2 * pi * alpha) + class_logits
+    class_logits = tf.log(p) - 0.5 * D * (tf.log(2 * pi * alpha)) + class_logits
     return class_logits
 
 def calculate_single_class_probs(tensor_z, means, alpha, p):
@@ -766,7 +919,7 @@ def linear_distance_penalty(z_dim, means, variances, probs, classes_num, gamma):
     dist /= variances # (tf.expand_dims(variances, 1) + tf.transpose(variances))
     mask = tf.ones([classes_num, classes_num]) - tf.eye(classes_num)
     dist = tf.boolean_mask(dist, tf.cast(mask, tf.bool))
-    return -tf.reduce_mean(tf.log(tf.sqrt(dist))) # sqrt
+    return -tf.reduce_mean(tf.sqrt(dist)) # sqrt
 
 def closest_distance_penalty(z_dim, means, variances, probs, classes_num):
     dist = tf.reduce_sum(tf.square(tf.expand_dims(means, 1) - tf.expand_dims(means, 0)), axis=-1)

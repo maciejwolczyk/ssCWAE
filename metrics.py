@@ -6,6 +6,7 @@ plt.switch_backend("agg")
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 from sklearn.manifold import TSNE
 from sklearn.decomposition import PCA
+from main import get_links_batch
 
 def draw_gmm(
         z, y, dataset, means=None, alpha=None, p=None,
@@ -31,7 +32,7 @@ def draw_gmm(
     if "train" in filename:
         must_z = []
         cannot_z = []
-        for idx, link in enumerate(dataset.links):
+        for idx, link in enumerate(dataset.links[:500]):
             if link[1]:
                 must_z += [z[2 * idx:2 * idx + 2]]
             else:
@@ -39,7 +40,7 @@ def draw_gmm(
 
         must_z = np.array(must_z)
         cannot_z = np.array(cannot_z)
-        print(must_z.shape, cannot_z.shape)
+        # print(must_z.shape, cannot_z.shape)
 
         for must_pair in must_z:
             plt.scatter(must_pair[:, 0], must_pair[:, 1], c="green")
@@ -100,6 +101,7 @@ def evaluate_model(
         "distance": model.costs["distance"],
         "erf": model.costs["erf"],
         "cec": model.costs["cec"],
+        "link": model.costs["link"],
         "sum": cost_sum
     }
 
@@ -116,6 +118,7 @@ def evaluate_model(
     all_z = []
     preds = []
     for batch_idx in range(batch_num):
+
         X_batch = valid_set["X"][batch_idx * batch_size:(batch_idx + 1) * batch_size]
         y_batch = valid_set["y"][batch_idx * batch_size:(batch_idx + 1) * batch_size]
 
@@ -190,7 +193,7 @@ def evaluate_model(
 
     if epoch % 5 == 0:
         print(epoch, "Dataset:", filename_prefix, end="\t")
-        for key in ["nmi", "rand_score", "cec", "erf", "reconstruction", "distance"]:
+        for key in ["nmi", "rand_score", "cramer-wold", "reconstruction", "link", "distance"]:
             print("{}: {:.4f}".format(key, metrics_final[key]), end=" ")
         print()
 

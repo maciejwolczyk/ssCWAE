@@ -721,11 +721,10 @@ class CnnCoder():
 
 class FCCoder():
 
-    def __init__(self, dataset,
-            h_dim=400):
+    def __init__(self, dataset, layers_num, h_dim=400):
         self.h_dim = h_dim
         self.image_shape = dataset.image_shape
-        self.hidden_dims = [h_dim, h_dim, h_dim]
+        self.hidden_dims = [h_dim] * layers_num
 
     def encode(self, x, z_dim, training=False):
         with tf.variable_scope("encoder", reuse=tf.AUTO_REUSE):

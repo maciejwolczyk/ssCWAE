@@ -71,7 +71,7 @@ def get_links_batch(batch_idx, batch_size, dataset, dummy_links):
     if dummy_links:
         labeled_batch_size = 0
     else:
-        labeled_batch_size = min(batch_size, len(dataset.links) * 2)
+        labeled_batch_size = min(batch_size // 2, len(dataset.links) * 2)
 
     sampling = False
     if sampling:
@@ -122,8 +122,9 @@ def get_links_batch(batch_idx, batch_size, dataset, dummy_links):
 def train_model(
         dataset_name, latent_dim=300, batch_size=100,
         labeled_examples_n=100, h_dim=400, kernel_size=4,
-        kernel_num=25, distance_weight=1.0, cc_ep=0.0, supervised_weight = 1.0,
-        rng_seed=11, init=1.0, gamma=1.0, erf_weight=1.0, erf_alpha=0.05, links_num=1000):
+        kernel_num=25, distance_weight=1.0, cc_ep=0.0, supervised_weight=1.0,
+        rng_seed=11, init=1.0, gamma=1.0, erf_weight=1.0,
+        erf_alpha=0.05, links_num=1000, learning_rate=3e-4, cw_weight=1.0):
 
 
     dataset = data_loader.get_dataset_by_name(dataset_name, rng_seed=rng_seed)
@@ -139,14 +140,15 @@ def train_model(
     #         kernel_size=3,
     #         kernel_num=kernel_num)
 
-    coder = architecture.FCCoder(dataset, h_dim=h_dim)
+    coder = architecture.FCCoder(dataset, h_dim=h_dim, layers_num=kernel_num)
 
     model_name = (
-        "links/{}/{}/{}d_cwdist_dw{}_kn{}_hd{}_bs{}_sw{}" +
-        "_{}links_nolinks0_e25_yesnorm_rng{}").format(
+        "links/{}/{}/{}d_lindist_dw{}_kn{}_hd{}_bs{}_sw{}_cw{}_lr{}_ln{}" +
+        "_trainmet_loglink_crossentropy").format(
             dataset.name, coder.__class__.__name__, latent_dim,
-            distance_weight, kernel_num, h_dim,
-            batch_size, supervised_weight, links_num, rng_seed)
+            distance_weight, kernel_num, h_dim, batch_size,
+            supervised_weight, cw_weight, learning_rate, links_num
+        )
 
     print(model_name)
     prepare_directories(model_name)
@@ -156,8 +158,8 @@ def train_model(
             latent_dim=latent_dim,
             supervised_weight=supervised_weight,
             distance_weight=distance_weight, eps=cc_ep,
-            init=init, gamma=gamma,
-            erf_weight=erf_weight, erf_alpha=erf_alpha)
+            init=init, gamma=gamma, learning_rate=learning_rate,
+            erf_weight=erf_weight, erf_alpha=erf_alpha, cw_weight=cw_weight)
 
     if batch_size is "same":
         batch_size = links_num // 2
@@ -165,7 +167,7 @@ def train_model(
 
 
 def run_training(model, dataset, batch_size):
-    n_epochs = 250
+    n_epochs = 1000
     with tf.Session(config=frugal_config) as sess:
         sess.run(tf.global_variables_initializer())
         costs = []
@@ -176,9 +178,9 @@ def run_training(model, dataset, batch_size):
             costs += [cost]
 
         costs = np.array(costs)
-        valid_costs, test_costs = costs[:, 0], costs[:, 1] #, costs[:, 2]
+        train_costs, valid_costs, test_costs = costs[:, 0], costs[:, 1] , costs[:, 2]
 
-        # metrics.save_costs(model, train_costs, "train")
+        metrics.save_costs(model, train_costs, "train")
         metrics.save_costs(model, valid_costs, "valid")
         metrics.save_costs(model, test_costs, "test")
 
@@ -187,11 +189,11 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
     # dataset.unlabeled_train if not links
 
     for batch_idx in trange(batches_num, leave=False):
-
-        # TODO: linki dopiero po 10 epokach
-        dummy_links = epoch_n < 0
+        labeled_batch_size = batch_size // 2
+        # dummy_links = (epoch_n < 50 or epoch_n >= 200)
+        dummy_links = False
         X_batch, y_batch, must_link, cannot_link = get_links_batch(
-                batch_idx, batch_size, dataset, dummy_links)
+                batch_idx, labeled_batch_size, dataset, dummy_links)
         if dataset.name == "mnist" and False:
             noisy_X_batch = apply_bernoulli_noise(X_batch)
         else:
@@ -214,35 +216,28 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
         # if batch_idx % 300:
         #     feed_dict[model.placeholders["train_labeled"]] = False
 
-        if epoch_n < 25:
+        if epoch_n < 750:
             feed_dict[model.placeholders["distance_weight"]] = 0
 
-        # if epoch_n < 35:
-        #     feed_dict[model.placeholders["distance_weight"]] = 0
-        #     feed_dict[model.placeholders["supervised_weight"]] = 0
-        #     sess.run(model.train_ops["full"], feed_dict=feed_dict)
-        # elif epoch_n == 35:
-        #     sess.run(model.train_ops["means_only"], feed_dict=feed_dict)
-        # elif epoch_n < 60:
-        #     feed_dict[model.placeholders["distance_weight"]] = 0
-        #     sess.run(model.train_ops["full"], feed_dict=feed_dict)
-        # else:
-        #     sess.run(model.train_ops["full"], feed_dict=feed_dict)
+        if epoch_n < 100:
+            sess.run(model.train_ops["rec"], feed_dict=feed_dict)
 
-        sess.run(model.train_ops["full_cec_erf"], feed_dict=feed_dict)
+        # elif epoch_n < 500:
+        #     if epoch_n % 2 == 0:
+        #         sess.run(model.train_ops["unsupervised_frozen"], feed_dict=feed_dict)
+        #     else:
+        #         sess.run(model.train_ops["unsupervised_means_only"], feed_dict=feed_dict)
 
-        # if epoch_n < 10:
-        #     sess.run(model.train_ops["rec_dkl"], feed_dict=feed_dict)
-        # elif epoch_n == 10 and batch_idx < 100:
-        #     sess.run(model.train_ops["means_only"], feed_dict=feed_dict)
-        # else:
-        #     sess.run(model.train_ops["full"], feed_dict=feed_dict)
-
-
-        # if batch_idx % 50:
-        #     print("\n", np.sum(
-        #         (np.expand_dims(means, 0) - np.expand_dims(means, 1)) ** 2, axis=-1)[0], dist, "\n")
-
+        elif epoch_n < 750:
+            if epoch_n % 2 == 0:
+                sess.run(model.train_ops["full_link_frozen"], feed_dict=feed_dict)
+            else:
+                sess.run(model.train_ops["full_link_means_only"], feed_dict=feed_dict)
+        else:
+            if epoch_n % 2 == 0:
+                sess.run(model.train_ops["unsupervised_frozen"], feed_dict=feed_dict)
+            else:
+                sess.run(model.train_ops["unsupervised_means_only"], feed_dict=feed_dict)
 
     if epoch_n % 5 == 0:
         print("\tGamma", gamma_val)
@@ -269,30 +264,33 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
     if epoch_n % 5 == 0:
         print("Emp vars", valid_var)
 
-    return valid_metrics, test_metrics
+    return train_metrics, valid_metrics, test_metrics
 
 if __name__ == "__main__":
-    latent_dims = [10, 20]
+    latent_dims = [10]
     distance_weights = [0.]
-    supervised_weights = [1., 5.]
-    kernel_nums = [16, 32]
+    supervised_weights = [1.]
+    cw_weights = [1., 2., 0.5]
+    kernel_nums = [2, 4, 6]
     batch_sizes = [200]
-    hidden_dims = [256, 512, 786]
+    hidden_dims = [1024]
     gammas = [1.0]
-    inits = [0.1]
+    inits = [2.]
     rng_seeds = [21]
     erf_weights = [0.]
     alphas = [1e-6]
-    links_nums = [0, 100, 500, 1000]
+    links_nums = [10000]
+    learning_rates = [3e-4]
 
     for hyperparams in itertools.product(
             latent_dims, kernel_nums, distance_weights,
             hidden_dims, batch_sizes, rng_seeds,
-            supervised_weights, inits, gammas,
-            erf_weights, links_nums):
-        ld, kn, dw, hd, bs, rs, sw, init, gamma, erf, ln = hyperparams
-        train_model("mnist", latent_dim=ld, h_dim=hd,
+            supervised_weights, cw_weights,
+            inits, gammas, erf_weights,
+            links_nums, learning_rates):
+        ld, kn, dw, hd, bs, rs, sw, cw, init, gamma, erf, ln, lr = hyperparams
+        train_model("mnist_subclass", latent_dim=ld, h_dim=hd,
             distance_weight=dw, kernel_num=kn, cc_ep=0.,
             batch_size=bs, labeled_examples_n=100, rng_seed=rs,
             supervised_weight=sw, init=init, gamma=gamma,
-            erf_weight=erf, links_num=ln)
+            erf_weight=erf, links_num=ln, learning_rate=lr, cw_weight=cw)

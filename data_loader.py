@@ -198,6 +198,24 @@ def get_mnist():
     labels = list(str(i) for i in range(10))
     return mnist_train, mnist_test, labels, "mnist"
 
+def get_mnist_subclass(classes_num=4):
+    mnist_train, mnist_test = tf.keras.datasets.mnist.load_data()
+
+    mnist_train_X, mnist_train_y = mnist_train
+    selected_train = mnist_train_y < classes_num
+    mnist_train_X = mnist_train_X[selected_train]
+    mnist_train_y = mnist_train_y[selected_train]
+    mnist_train = (mnist_train_X, mnist_train_y)
+
+
+    mnist_test_X, mnist_test_y = mnist_test
+    selected_test = mnist_test_y < classes_num
+    mnist_test_X = mnist_test_X[selected_test]
+    mnist_test_y = mnist_test_y[selected_test]
+    mnist_test = (mnist_test_X, mnist_test_y)
+
+    labels = list(str(i) for i in range(classes_num))
+    return mnist_train, mnist_test, labels, "mnist_subclass"
 
 
 def get_fashion_mnist():
@@ -318,6 +336,7 @@ def get_celeba_glasses():
 def get_dataset_by_name(name, rng_seed):
     dataset_getters = {
        "mnist": get_mnist,
+       "mnist_subclass": get_mnist_subclass,
        "fashion_mnist": get_fashion_mnist,
        "svhn": get_svhn,
        "cifar": get_cifar,
