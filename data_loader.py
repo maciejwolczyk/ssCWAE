@@ -1,18 +1,20 @@
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
-plt.switch_backend("agg")
 import scipy.io as sio
 import os
 
 from sklearn.model_selection import train_test_split
-from sklearn.decomposition import PCA
 from tqdm import tqdm
 from PIL import Image
 
+plt.switch_backend("agg")
+
 
 class Dataset:
-    def __init__(self, train_set, test_set, labels_names, dataset_name, rng_seed=11):
+    def __init__(
+            self, train_set, test_set, labels_names,
+            dataset_name, rng_seed=11):
         self.name = dataset_name
         self.labels_names = labels_names
         train_X, train_y = train_set
@@ -24,7 +26,6 @@ class Dataset:
         if test_X.max() > 1:
             test_X = test_X / 255
 
-
         train_y = train_y.squeeze()
         test_y = test_y.squeeze()
 
@@ -35,24 +36,26 @@ class Dataset:
         else:
             self.classes_num = train_y.shape[-1]
 
-
         self.train_examples_num = len(train_X)
         self.test_examples_num = len(test_X)
 
         self.image_shape = list(train_X.shape[1:])  # Ignore num of examples
 
         if len(self.image_shape) == 2:
-            self.image_shape = self.image_shape + [1,]
+            self.image_shape = self.image_shape + [1]
 
         self.train = {"X": train_X.reshape(self.train_examples_num, -1),
                       "y": train_y}
 
-        self.test = {"X": test_X.reshape(self.test_examples_num, -1),
-                      "y": test_y}
+        self.test = {
+                "X": test_X.reshape(self.test_examples_num, -1),
+                "y": test_y
+            }
 
-        self.valid = {"X": self.train["X"][-5000:],
-                      "y": self.train["y"][-5000:]}
-
+        self.valid = {
+                "X": self.train["X"][-5000:],
+                "y": self.train["y"][-5000:]
+            }
 
         print(self.train["y"].sum(0))
         self.whitened = False
@@ -76,8 +79,10 @@ class Dataset:
             reshaped_train = self.train["X"].reshape([-1] + self.image_shape)
             reshaped_test = self.test["X"].reshape([-1] + self.image_shape)
 
-            reshaped_train += np.random.uniform(0, 1. / 255., size=reshaped_train.shape)
-            reshaped_test += np.random.uniform(0, 1. / 255., size=reshaped_test.shape)
+            reshaped_train += np.random.uniform(
+                    0, 1. / 255., size=reshaped_train.shape)
+            reshaped_test += np.random.uniform(
+                    0, 1. / 255., size=reshaped_test.shape)
 
             print(reshaped_train.shape)
             self.std = reshaped_train.std(axis=(0, 1, 2))
@@ -88,7 +93,7 @@ class Dataset:
             self.train["X"] = reshaped_train.reshape(self.train["X"].shape)
             self.test["X"] = reshaped_test.reshape(self.test["X"].shape)
         else:
-            raise NotImplemented
+            raise NotImplementedError
 
     def blackening(self, X):
         if self.name == "mnist":
@@ -127,21 +132,21 @@ class Dataset:
         self.semi_labeled_train = {"X": semi_labeled_X,
                                    "y": semi_labeled_y}
 
-
     def remove_labels_fraction(
-        self, number_to_keep=None,
-        fraction_to_remove=0.9, keep_labels_proportions=True,
-        batch_size=None):
-
+            self, number_to_keep=None,
+            fraction_to_remove=0.9, keep_labels_proportions=True,
+            batch_size=None):
 
         labels = np.copy(self.train["y"])
         labels_props = self.train["y"].sum(0) / self.train["y"].sum()
-        print("Labels len", len(labels), "shape", labels.shape, "Props", labels_props)
-        # labels_props = np.array([1 / self.classes_num] * self.classes_num)
+        print(
+            "Labels len:", len(labels),
+            "Labels shape:", labels.shape,
+            "Labels proportions:", labels_props
+        )
 
         if keep_labels_proportions:
             argmax_labels = labels.argmax(-1).squeeze()
-            labels_len = labels.shape[-1]
 
             class_to_keep = (labels_props * number_to_keep).astype("int")
             print("Before leftovers", class_to_keep, class_to_keep.sum())
@@ -150,7 +155,6 @@ class Dataset:
                 diff = labels_props * 100 - class_to_keep
                 class_to_keep[np.argmax(diff)] += 1
             print("After leftovers", class_to_keep, class_to_keep.sum())
-
 
             for idx, c_to_keep in enumerate(class_to_keep):
                 class_examples = np.where(argmax_labels == idx)[0]
@@ -214,7 +218,8 @@ class Dataset:
                               "y": self.train["y"][remain_indices]}
 
         self.unlabeled_train = {"X": self.train["X"].copy()}
-        print("Proportions in labeled sample",
+        print(
+            "Proportions in labeled sample",
             self.labeled_train["y"].sum(0) / self.labeled_train["y"].sum(),
             self.labeled_train["y"].sum())
 
@@ -236,6 +241,7 @@ class Dataset:
         self.labeled_train["X"] = self.labeled_train["X"][indices]
         self.labeled_train["y"] = self.labeled_train["y"][indices]
 
+
 def get_mnist(extra=True):
     mnist_train, mnist_test = tf.keras.datasets.mnist.load_data()
     labels = list(str(i) for i in range(10))
@@ -254,43 +260,41 @@ def get_fashion_mnist(extra=True):
     for idx, y in enumerate(fmnist_test[1]):
         onehot_labels[idx, y] = 1
     fmnist_test = np.reshape(fmnist_test[0] / 255, (-1, 28*28)), onehot_labels
-    labels = ["tshirt", "trousers", "pullover", "dress", "coat", "sandal", "shirt", "sneaker", "bag", "ankle\nboot"]
+    labels = [
+            "tshirt", "trousers", "pullover", "dress", "coat",
+            "sandal", "shirt", "sneaker", "bag", "ankle\nboot"]
     return fmnist_train, fmnist_test, labels, "fashion_mnist"
 
-def get_svhn(extra=True): # / 255?
+
+def get_svhn(extra=True):
     dataset_train = sio.loadmat("dataset/svhn/train_32x32.mat")
     dataset_train = dataset_train["X"].transpose(3, 0, 1, 2), dataset_train["y"] - 1
 
     if extra:
         dataset_extra = sio.loadmat("dataset/svhn/extra_32x32.mat")
-        dataset_extra = dataset_extra["X"].transpose(3, 0, 1, 2), dataset_extra["y"] - 1
+        dataset_extra = (
+                dataset_extra["X"].transpose(3, 0, 1, 2),
+                dataset_extra["y"] - 1
+            )
         dataset_train = (
             np.concatenate([dataset_train[0], dataset_extra[0]], axis=0),
             np.concatenate([dataset_train[1], dataset_extra[1]], axis=0)
         )
 
     dataset_test = sio.loadmat("dataset/svhn/test_32x32.mat")
-    dataset_test = dataset_test["X"].transpose(3, 0, 1, 2), dataset_test["y"] - 1
+    dataset_test = (
+            dataset_test["X"].transpose(3, 0, 1, 2),
+            dataset_test["y"] - 1
+        )
     labels = list(str(i) for i in range(1, 10)) + ["0"]
     # print(np.histogram(dataset_train[1]))
 
     return dataset_train, dataset_test, labels, "svhn"
 
-def get_norb(extra=True): # Doesn't work
-    train_X = sio.loadmat("dataset/norb/smallnorb-train-dat.mat")
-    train_y = sio.loadmat("dataset/norb/smallnorb-train-cat.mat")
-    test_X = sio.loadmat("dataset/norb/smallnorb-test-dat.mat")
-    test_y = sio.loadmat("dataset/norb/smallnorb-test-cat.mat")
-    print(train_X.shape, train_y.shape, test_X.shape, test_y.shape)
-
-def get_cifar(extra=True):
-    cifar_train, cifar_test = tf.keras.datasets.cifar10.load_data()
-    labels = ["airplane", "automobile", "bird", "cat",
-          "deer", "dog", "frog", "horse", "ship", "truck"]
-    return cifar_train, cifar_test, labels, "cifar"
 
 def get_celeba_images(examples_num, extra=True):
 
+    # TODO: poprawic to
     dataset_dir = "/mnt/users/mwolczyk/local/Repos/networks-do-networks/dataset/img_align_celeba/"
     orig_size = [178, 218]
     crop_size = [140, 140]
@@ -298,8 +302,6 @@ def get_celeba_images(examples_num, extra=True):
 
     start_y = (orig_size[1] - crop_size[0]) // 2
     start_x = (orig_size[0] - crop_size[1]) // 2
-
-    loaded_images = []
 
     train = []
     valid = []
@@ -330,6 +332,7 @@ def get_celeba_images(examples_num, extra=True):
     return np.array(train), np.array(valid), np.array(test)
 
 
+# TODO: does not work as of yet
 def get_celeba_multitag(extra=True):
     examples_num = 200000
     attr_labels = [
@@ -350,17 +353,15 @@ def get_celeba_multitag(extra=True):
     chosen_indices = [idx for idx, label in enumerate(attr_labels)
                       if label in chosen_attributes]
 
-
     train_x, valid_x, test_x = get_celeba_images(examples_num, extra=extra)
 
     train_y = []
     valid_y = []
     test_y = []
 
-    # k
     with open(dataset_dir + "/list_attr_celeba.txt") as f:
-        f.readline() # Omitting header
-        f.readline() # Omitting label list
+        f.readline()  # Omitting header
+        f.readline()  # Omitting label list
         for idx, line in enumerate(f):
             if examples_num is not None and idx >= examples_num:
                 break
@@ -370,7 +371,6 @@ def get_celeba_multitag(extra=True):
             labels = line.split()[1:]  # skip filename in the first column
             one_hot_label = [0] * (len(chosen_attributes) + 1)
 
-
             for idx, attr_idx in enumerate(chosen_indices):
                 val = int(labels[attr_idx])
                 if val == 1:
@@ -378,7 +378,7 @@ def get_celeba_multitag(extra=True):
                 elif val == -1:
                     pass
                 else:
-                    raise ValueError("Neither 1 nor -1: {}".format(label))
+                    raise ValueError("Neither 1 nor -1: {}".format(val))
             if idx < 162770:
                 train_y += [one_hot_label]
             elif idx < 182637:
@@ -395,7 +395,10 @@ def get_celeba_multitag(extra=True):
     print("Ratio of labels:", Y.sum(axis=0) / Y.shape[0])
     print("Nonzero count", np.count_nonzero(Y.sum(1)))
 
-    return (train_x, train_y), (test_x, test_y), chosen_attributes + ["None"], "celeba_multitag"
+    return (
+        (train_x, train_y), (test_x, test_y),
+        chosen_attributes + ["None"], "celeba_multitag")
+
 
 def get_celeba_singletag(extra=True):
     examples_num = 200000
@@ -421,13 +424,12 @@ def get_celeba_singletag(extra=True):
     labels_names = ["F/NS", "F/S", "M/NS", "M/S"]
     # labels_names = ["Not smiling", "Smiling"]
 
-
     train_y = []
     valid_y = []
     test_y = []
     with open(dataset_dir + "/list_attr_celeba.txt") as f:
-        f.readline() # Omitting header
-        f.readline() # Omitting label list
+        f.readline()  # Omitting header
+        f.readline()  # Omitting label list
         for line_idx, line in enumerate(f):
             if examples_num is not None and line_idx >= examples_num:
                 break
@@ -445,7 +447,7 @@ def get_celeba_singletag(extra=True):
                 elif val == -1:
                     pass
                 else:
-                    raise ValueError("Neither 1 nor -1: {}".format(label))
+                    raise ValueError("Neither 1 nor -1: {}".format(label_val))
 
             one_hot_label = [0] * classes_num
             one_hot_label[label_val] = 1
@@ -470,6 +472,7 @@ def get_celeba_singletag(extra=True):
 
     return (train_x, train_y), (test_x, test_y), labels_names, "celeba_singletag"
 
+
 def get_celeba_smiles(extra=True):
     if extra:
         num_examples = 20000
@@ -480,7 +483,7 @@ def get_celeba_smiles(extra=True):
 
     Y = []
     with open("dataset/Smiling_CELEBA.tsv") as f:
-        f.readline() # Omitting header
+        f.readline()  # Omitting header
         for idx, line in enumerate(f):
             if idx >= num_examples:
                 break
@@ -497,7 +500,8 @@ def get_celeba_smiles(extra=True):
     print("Ratio of labels:", Y.sum(axis=0) / Y.shape[0])
 
     train_x, test_x, train_y, test_y = train_test_split(X, Y, test_size=0.1)
-    return (train_x, train_y), (test_x, test_y), ["No smile", "Smile"], "celeba_smiles"
+    labels_names = ["No smile", "Smile"]
+    return (train_x, train_y), (test_x, test_y), labels_names, "celeba_smiles"
 
 
 def get_celeba_glasses(extra=True):
@@ -510,7 +514,7 @@ def get_celeba_glasses(extra=True):
 
     Y = []
     with open("dataset/Eyeglasses_CELEBA.tsv") as f:
-        f.readline() # Omitting header
+        f.readline()  # Omitting header
         for idx, line in enumerate(f):
             if idx >= num_examples:
                 break
@@ -527,7 +531,8 @@ def get_celeba_glasses(extra=True):
     print("Ratio of labels:", Y.sum(axis=0) / Y.shape[0])
 
     train_x, test_x, train_y, test_y = train_test_split(X, Y, test_size=0.1)
-    return (train_x, train_y), (test_x, test_y), ["No glasses", "Glasses"], "celeba_glasses"
+    labels_names = ["No glasses", "Glasses"]
+    return (train_x, train_y), (test_x, test_y), labels_names, "celeba_glasses"
 
 
 def get_dataset_by_name(name, rng_seed, extra=True):
@@ -535,7 +540,6 @@ def get_dataset_by_name(name, rng_seed, extra=True):
        "mnist": get_mnist,
        "fashion_mnist": get_fashion_mnist,
        "svhn": get_svhn,
-       "cifar": get_cifar,
        "celeba_smiles": get_celeba_smiles,
        "celeba_glasses": get_celeba_glasses,
        "celeba_multitag": get_celeba_multitag,
@@ -546,6 +550,7 @@ def get_dataset_by_name(name, rng_seed, extra=True):
     train, test, labels, name = getter(extra=extra)
     dataset = Dataset(train, test, labels, name, rng_seed=rng_seed)
     return dataset
+
 
 def one_hot_vectorize(dataset, labels_n):
     onehot_labels = np.zeros(dataset.shape + (labels_n,))
