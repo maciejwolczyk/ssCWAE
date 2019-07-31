@@ -118,6 +118,10 @@ def evaluate_gmmcwae(
     emp_means = []
     for label in range(dataset.classes_num):
         labeled_points = all_z[preds == label]
+        if labeled_points.size == 0: 
+            emp_means += [model.z_dim * [float("nan")]]
+            emp_variances += [model.z_dim * [0]]
+            continue
         emp_means += [np.mean(labeled_points, axis=0)]
         emp_var = np.std(labeled_points, axis=0)
         emp_var = np.nan_to_num(emp_var)
@@ -187,7 +191,6 @@ def sample_from_classes(
     means_val, alphas_val = sess.run(
             [model.gausses["means"], model.gausses["variations"]])
 
-    print("Means shape", means_val.shape)
     if means_val.shape[0] == 1:
         means_val = np.tile(means_val, (10, 1))
         alphas_val = np.tile(alphas_val, (10,))
@@ -197,12 +200,6 @@ def sample_from_classes(
         alphas_val = np.roll(alphas_val, 1, axis=0)
 
     im_h, im_w, im_c = dataset.image_shape
-
-    if valid_var is not None:
-        alphas_val = valid_var
-        print("Empirical variances", valid_var)
-    else:
-        print("Analytic variances", alphas_val)
 
     canvas = np.empty((im_h * len(means_val), im_w * 10, im_c))
 
@@ -386,7 +383,7 @@ def inter_class_interpolation(
 
     plt.xticks([])
     plt.yticks([])
-    plt.axes().set_aspect('equal')
+    plt.axis('equal')
     plt.axis("off")
     plt.imshow(canvas.squeeze(), origin="upper", cmap="gray")
     if show_only:
@@ -488,7 +485,7 @@ def chosen_class_interpolation(
 
         plt.xticks([])
         plt.yticks([])
-        plt.axes().set_aspect('equal')
+        plt.axis('equal')
         plt.axis("off")
         plt.imshow(canvas.squeeze(), origin="upper", cmap="gray")
         filename = "results/{}/{}_{}_{}-{}.png".format(
@@ -572,7 +569,7 @@ def cyclic_interpolation(
 
         plt.xticks([])
         plt.yticks([])
-        plt.axes().set_aspect('equal')
+        plt.axis('equal')
         plt.axis("off")
         plt.imshow(canvas.squeeze(), origin="upper", cmap="gray")
         plt.tight_layout(pad=0)
@@ -659,7 +656,7 @@ def interpolation(input_indices, sess, model, dataset, epoch, separate_files=Fal
         for idx in range(ny):
             plt.xticks([])
             plt.yticks([])
-            plt.axes().set_aspect('equal')
+            plt.axis('equal')
             plt.axis("off")
 
             row = canvas[idx * im_h:(idx + 1) * im_h]
@@ -671,7 +668,7 @@ def interpolation(input_indices, sess, model, dataset, epoch, separate_files=Fal
     else:
         plt.xticks([])
         plt.yticks([])
-        plt.axes().set_aspect('equal')
+        plt.axis('equal')
         plt.axis("off")
         plt.imshow(canvas, origin="upper", cmap="gray")
         filename = "results/{}/interpolation_{}.png".format(

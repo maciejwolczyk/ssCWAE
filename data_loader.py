@@ -106,31 +106,6 @@ class Dataset:
 
         return output
 
-    def load_links(self, pairs_num):
-        pair_indices = self.rng.choice(
-            self.train_examples_num, size=(10000, 2), replace=True)
-        pair_indices = pair_indices[:pairs_num]
-        print(pair_indices[0])
-
-        links = []
-        for first_idx, second_idx in pair_indices:
-            X_pair = [self.train["X"][first_idx], self.train["X"][second_idx]]
-            first_y = self.train["y"][first_idx].argmax()
-            second_y = self.train["y"][second_idx].argmax()
-            if first_y == second_y:
-                plt.imshow(X_pair[0].reshape(28, 28))
-                plt.imshow(X_pair[1].reshape(28, 28))
-                links += [(X_pair, True)]
-            else:
-                links += [(X_pair, False)]
-        self.links = links
-
-        indices = pair_indices.reshape(-1)
-        semi_labeled_X = self.train["X"][indices]
-        semi_labeled_y = self.train["y"][indices]
-
-        self.semi_labeled_train = {"X": semi_labeled_X,
-                                   "y": semi_labeled_y}
 
     def remove_labels_fraction(
             self, number_to_keep=None,
@@ -267,6 +242,12 @@ def get_fashion_mnist(extra=True):
 
 
 def get_svhn(extra=True):
+    dataset_dir = "dataset/svhn/"
+    filenames = ["train_32x32.mat", "extra_32x32.mat", "test_32x32.mat"]
+    if not all(os.path.isfile(dataset_dir + f) for f in filenames):
+        raise ValueError(
+                "No SVHN files in directory: {}. Files {} expected.".format(
+                    dataset_dir, ", ".join(filenames)))
     dataset_train = sio.loadmat("dataset/svhn/train_32x32.mat")
     dataset_train = dataset_train["X"].transpose(3, 0, 1, 2), dataset_train["y"] - 1
 

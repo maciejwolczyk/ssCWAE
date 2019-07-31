@@ -151,12 +151,11 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
         print("Model saved in path: {}".format(save_path))
 
     if epoch_n % 10 == 0:
-        print("Model name", type(model).__name__)
         if type(model).__name__ != "DeepGmmModel":
             analytic_mean = sess.run(model.gausses["means"])
             squared_diff = np.square(analytic_mean - valid_mean)
             mean_diff = np.sqrt(np.sum(squared_diff, axis=1))
-            print("Mean diff:", mean_diff)
+            # print("Mean diff:", mean_diff)
 
         input_indices = list(range(10))
         metrics.interpolation(input_indices, sess, model, dataset, epoch_n)
@@ -291,7 +290,7 @@ def load_and_test():
 
 
 def grid_train():
-    dataset_name = "mnist"
+    dataset_name = "svhn"
 
     if dataset_name == "mnist":
         labeled_num = 100
@@ -300,7 +299,21 @@ def grid_train():
     elif dataset_name == "celeba_multitag" or dataset_name == "celeba_singletag":
         labeled_num = 1000
 
-    if dataset_name == "svhn":
+    if dataset_name == "mnist":
+        latent_dims = [10]
+        distance_weights = [0.]
+        supervised_weights = [0.]
+        kernel_nums = [2, 4]
+
+        learning_rates = [3e-4]
+        cw_weights = [5.]
+        batch_sizes = [100]
+        hidden_dims = [1024]
+
+        inits = [0.1]
+        rng_seeds = [26]
+
+    elif dataset_name == "svhn":
         latent_dims = [20]
         learning_rates = [3e-4]
         distance_weights = [0.]
@@ -326,20 +339,6 @@ def grid_train():
         inits = [1.]
         rng_seeds = [20]
 
-    elif dataset_name == "mnist":
-        latent_dims = [10]
-        distance_weights = [0.]
-        supervised_weights = [0.]
-        kernel_nums = [2, 4]
-
-        learning_rates = [3e-4]
-        cw_weights = [5.]
-        batch_sizes = [100]
-        hidden_dims = [1024]
-
-        inits = [0.1]
-        rng_seeds = [26]
-        # rng_seeds = list(range(10, 20))
 
     for hyperparams in itertools.product(
             latent_dims, kernel_nums, distance_weights,
