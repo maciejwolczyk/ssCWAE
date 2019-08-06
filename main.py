@@ -78,7 +78,7 @@ def train_model(
 
     model_name = (
         "{}/{}/{}d_kn{}_hd{}_bs{}_sw{}_dw{}_init{}" +
-        "cw{}_lr{}_noneqprob_cyclic_realmse_4rep_rng{}_newlog").format(
+        "cw{}_lr{}_rng{}_logdist_50edist").format(
             dataset.name, coder.__class__.__name__,
             latent_dim, kernel_num, h_dim,
             batch_size, supervised_weight, distance_weight,
@@ -97,7 +97,7 @@ def train_model(
 
 
 def run_training(model, dataset, batch_size):
-    n_epochs = 400
+    n_epochs = 1000
     with tf.Session(config=frugal_config) as sess:
         sess.run(tf.global_variables_initializer())
 
@@ -130,6 +130,12 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
             model.placeholders["training"]: True}
 
         feed_dict[model.placeholders["train_labeled"]] = False
+        
+        if epoch_n < 500 or epoch_n > 550:
+            feed_dict[model.placeholders["distance_weight"]] = 0.
+
+            
+
         sess.run(model.train_ops["full"], feed_dict=feed_dict)
 
     train_metrics, _, _ = metrics.evaluate_gmmcwae(
@@ -150,7 +156,7 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
                 sess, "results/{}/epoch={}.ckpt".format(model.name, epoch_n))
         print("Model saved in path: {}".format(save_path))
 
-    if epoch_n % 10 == 0:
+    if epoch_n % 25 == 0:
         if type(model).__name__ != "DeepGmmModel":
             analytic_mean = sess.run(model.gausses["means"])
             squared_diff = np.square(analytic_mean - valid_mean)
@@ -161,12 +167,12 @@ def run_epoch(epoch_n, sess, model, dataset, batch_size, gamma_std):
         metrics.interpolation(input_indices, sess, model, dataset, epoch_n)
         metrics.sample_from_classes(sess, model, dataset, epoch_n, valid_var=None)
 
-        if type(model).__name__ != "CwaeModel":
-            metrics.inter_class_interpolation(sess, model, dataset, epoch_n)
-            metrics.cyclic_interpolation(
-                    input_indices, sess, model, dataset, epoch_n)
-            metrics.cyclic_interpolation(
-                    input_indices, sess, model, dataset, epoch_n, direct=True)
+        # if type(model).__name__ != "CwaeModel":
+        #     metrics.inter_class_interpolation(sess, model, dataset, epoch_n)
+        #     metrics.cyclic_interpolation(
+        #             input_indices, sess, model, dataset, epoch_n)
+        #     metrics.cyclic_interpolation(
+        #             input_indices, sess, model, dataset, epoch_n, direct=True)
 
     if epoch_n % 5 == 0:
         metrics.save_distance_matrix(sess, model, epoch_n)
@@ -290,7 +296,7 @@ def load_and_test():
 
 
 def grid_train():
-    dataset_name = "svhn"
+    dataset_name = "mnist"
 
     if dataset_name == "mnist":
         labeled_num = 100
@@ -300,17 +306,17 @@ def grid_train():
         labeled_num = 1000
 
     if dataset_name == "mnist":
-        latent_dims = [10]
-        distance_weights = [0.]
+        latent_dims = [5]
+        distance_weights = [100.]
         supervised_weights = [0.]
         kernel_nums = [2, 4]
 
         learning_rates = [3e-4]
-        cw_weights = [5.]
+        cw_weights = [1., 2.]
         batch_sizes = [100]
-        hidden_dims = [1024]
+        hidden_dims = [128, 256]
 
-        inits = [0.1]
+        inits = [1., 2.]
         rng_seeds = [26]
 
     elif dataset_name == "svhn":
@@ -318,7 +324,7 @@ def grid_train():
         learning_rates = [3e-4]
         distance_weights = [0.]
         cw_weights = [5.]
-        supervised_weights = [0.]
+        supervised_weights = [10.]
         kernel_nums = [5]
         batch_sizes = [1000]
         hidden_dims = [786]

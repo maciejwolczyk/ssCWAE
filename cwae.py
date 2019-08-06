@@ -54,7 +54,7 @@ class GmmCwaeModel():
                 dtype=tf.float32, name='target_y')
 
         train_labeled = tf.placeholder_with_default(True, shape=[])
-        tensor_cw_weight = tf.placeholder_with_default(cw_weight, shape=[])
+        tensor_distance_weight = tf.placeholder_with_default(distance_weight, shape=[])
         tensor_training = tf.placeholder_with_default(False, shape=[])
 
         labeled_mask = get_labels_mask(tensor_labels)
@@ -83,7 +83,7 @@ class GmmCwaeModel():
         cw_cost = cramer_wold_distance(
                 unsupervised_tensor_z, means, variances, probs, gamma)
         log_cw_cost = tf.log(cw_cost)
-        log_cw_cost *= tensor_cw_weight
+        log_cw_cost *= cw_weight
 
         # MSE
         rec_cost = norm_squared(tensor_x - tensor_y, axis=-1)
@@ -94,19 +94,19 @@ class GmmCwaeModel():
                 tf.boolean_mask(rec_cost, tf.logical_not(labeled_mask)))
         )
 
-        distance_cost = linear_distance_penalty(
+        distance_cost = log_linear_distance_penalty(
                 z_dim, means, variances, probs, dataset.classes_num)
 
         unsupervised_cost = tf.reduce_mean(
                 rec_cost
                 + log_cw_cost
-                + distance_weight * distance_cost)
+                + tensor_distance_weight * distance_cost)
 
         full_cost = tf.reduce_mean(
                 rec_cost
                 + log_cw_cost
                 + supervised_weight * class_cost
-                + distance_weight * distance_cost
+                + tensor_distance_weight * distance_cost
                 )
 
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
@@ -133,8 +133,8 @@ class GmmCwaeModel():
             "X": tensor_x,
             "y": tensor_labels,
             "train_labeled": train_labeled,
-            "cw_weight": tensor_cw_weight,
             "training": tensor_training,
+            "distance_weight": tensor_distance_weight
         }
 
         self.out = {
@@ -298,3 +298,11 @@ def linear_distance_penalty(z_dim, means, variances, probs, classes_num):
     mask = tf.ones([classes_num, classes_num]) - tf.eye(classes_num)
     dist = tf.boolean_mask(dist, tf.cast(mask, tf.bool))
     return -tf.reduce_mean(tf.sqrt(dist))
+
+def log_linear_distance_penalty(z_dim, means, variances, probs, classes_num):
+    diffs = tf.expand_dims(means, 1) - tf.expand_dims(means, 0)
+    dist = tf.reduce_sum(tf.square(diffs), axis=-1)
+    dist /= variances
+    mask = tf.ones([classes_num, classes_num]) - tf.eye(classes_num)
+    dist = tf.boolean_mask(dist, tf.cast(mask, tf.bool))
+    return -tf.reduce_mean(tf.log(tf.sqrt(dist)))

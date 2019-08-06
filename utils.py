@@ -14,6 +14,9 @@ def prepare_directories(model_name):
         rmtree(graphs_dir)
     os.makedirs(graphs_dir)
 
+    samples_dir = "results/{}/final_samples".format(model_name)
+    os.makedirs(samples_dir)
+
 
 def apply_bernoulli_noise(x):
     return np.random.binomial(1, p=x, size=x.shape)

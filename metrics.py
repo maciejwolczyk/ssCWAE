@@ -134,7 +134,7 @@ def evaluate_gmmcwae(
     metrics_final["rand_score"] = rand_score
 
     # PCA
-    if epoch % 5 == 0:
+    if epoch % 10 == 0:
         try:
             if model.z_dim == 2:  # If we're on a plane, PCA is not necessary
                 pca_results = all_z
@@ -161,7 +161,7 @@ def evaluate_gmmcwae(
     if epoch % 5 == 0:
         print(epoch, "Dataset:", filename_prefix, end="\t")
         metrics_list = [
-            "accuracy", "cramer-wold", "reconstruction",
+            "rand_score", "cramer-wold", "reconstruction",
             "distance", "classification"
             ]
         for key in metrics_list:
@@ -690,11 +690,11 @@ def plot_costs(fig, costs, name):
     ax_1.clear()
     ax_2.clear()
 
-    for key in ["classification", "cramer-wold", "reconstruction"]:
+    for key in ["distance", "cramer-wold", "reconstruction"]:
         if key in costs:
             ax_1.plot(costs[key], label=key)
 
-    for key in ["accuracy"]:
+    for key in ["rand_score", "accuracy"]:
         if key in costs:
             ax_2.set_ylim(0, 1)
             ax_2.plot(costs[key], label=key, c="red")
