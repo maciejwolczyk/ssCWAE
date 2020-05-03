@@ -1,0 +1,15 @@
+labeled_num: 100
+learning_rate: 3e-4
+batch_size: 100
+
+latent_dim: 10
+layer_num: 2
+hidden_dim: 1000
+
+loss_weights:
+  distance: 0.
+  supervised: 10.
+  cw: 5
+
+init: 0.1
+rng_seed: 20
