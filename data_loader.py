@@ -1,14 +1,13 @@
-import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.io as sio
 import os
 
-from sklearn.model_selection import train_test_split
-from tqdm import tqdm
 from PIL import Image
-
-plt.switch_backend("agg")
+from torch.utils.data import DataLoader, Subset
+from torchvision import datasets
+from torchvision.transforms import ToTensor
+from tqdm import tqdm
 
 def prepare_loaders(train_dataset, test_dataset):
     unsupervised_loader = DataLoader(
@@ -21,8 +20,13 @@ def prepare_loaders(train_dataset, test_dataset):
 
     test_loader = DataLoader(
         test_dataset, batch_size=128)
+    loaders = {
+        "unsupervised": unsupervised_loader,
+        "supervised": supervised_loader,
+        "test": test_loader
+    }
             
-    return unsupervised_loader, supervised_loader, test_loader
+    return loaders
 
 def get_mnist(extra=True):
     mnist_train = datasets.MNIST(
@@ -68,20 +72,19 @@ def get_svhn(extra=True):
 
 def get_dataset_by_name(name, rng_seed, extra=True):
     dataset_getters = {
-       "mnist": get_mnist,
-       "fashion_mnist": get_fashion_mnist,
-       "svhn": get_svhn,
-       "celeba_smiles": get_celeba_smiles,
-       "celeba_glasses": get_celeba_glasses,
-       "celeba_multitag": get_celeba_multitag,
-       "celeba_singletag": get_celeba_singletag
+       "MNIST": get_mnist,
+       "Fashion_MNIST": get_fashion_mnist,
+       "SVHN": get_svhn,
+       # "celeba_smiles": get_celeba_smiles,
+       # "celeba_glasses": get_celeba_glasses,
+       # "celeba_multitag": get_celeba_multitag,
+       # "celeba_singletag": get_celeba_singletag
     }
 
     getter = dataset_getters[name]
     train, test, labels, name = getter(extra=extra)
-    train_loaders = semi_supervised_loaders
-    return dataset
-
+    loaders = prepare_loaders(train, test)
+    return train, test, loaders
 
 def one_hot_vectorize(dataset, labels_n):
     onehot_labels = np.zeros(dataset.shape + (labels_n,))

@@ -1,16 +1,19 @@
+dataset_name: SVHN
+
 labeled_num: 1000
 learning_rate: 3e-4
 batch_size: 1000
 
-
-latent_dim: 20
-layer_num: 5
-hidden_dim: 786
+architecture:
+  layers_num: 5
+  input_dim: 3072
+  latent_dim: 20
+  hidden_dim: 786
 
 loss_weights:
   distance: 0
   supervised: 10
   cw: 5
 
-init: 2
+init_radius: 2
 rng_seed: 20

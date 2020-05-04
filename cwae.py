@@ -1,27 +1,62 @@
 import numpy as np
-import tensorflow as tf
-import tensorflow.train as tft
 from math import pi
+import torch
+from torch import nn
 
-class GaussianMixture:
-    def __init__(self, num_components, radius, var=0.01, requires_grad=False):
+class Segma(nn.Module):
+    def __init__(self, name, gmm, coder, loss_weights):
+        super(Segma, self).__init__()
+        self.name = name
+        self.gmm = gmm
+        self.coder = coder
+        self.loss_weights = loss_weights
+        self.class_loss = nn.CrossEntropyLoss()
+
+    def supervised_loss(self, encoded, labels):
+        class_logits = self.gmm.calculate_logits(encoded)
+        classification_loss = self.class_loss(class_logits, labels)
+        classification_loss *= self.loss_weights["supervised"]
+
+        return classification_loss
+
+    def unsupervised_loss(self, encoded, decoded, X):
+        X = X.view(decoded.shape)
+        rec_cost = norm_squared(decoded - X).mean()
+        log_cw_cost = self.gmm.cw_distance(encoded)
+
+        # TODO: gradient clipping
+        # TODO: weightning
+
+        return rec_cost + log_cw_cost * self.loss_weights["cw"]
+
+    def forward(self, x):
+        return self.coder(x.float())
+
+class GaussianMixture(nn.Module):
+    def __init__(self, num_components, latent_dim, radius, var=0.01):
         # TODO: change init
-        means = []
-        for idx in range(num_components):
-            rads = (2 * pi / num_components) * idx
-            means += [[np.sin(rads) * radius, np.cos(rads) * radius]]
+        super(GaussianMixture, self).__init__()
+
         self.num_components = num_components
-        self.requires_grad = requires_grad
-        self.means = torch.tensor(means, requires_grad=requires_grad, device=DEVICE)
-        self.variances = torch.tensor([var] * num_components, device=DEVICE)
-        self.probs = torch.tensor([1 / num_components] * num_components, device=DEVICE)
+
+        means = self.get_means_init(num_components, latent_dim, radius)
+
+        self.means = nn.Parameter(torch.tensor(means).float())
+        self.variances = nn.Parameter(torch.tensor([var] * num_components), requires_grad=False)
+        self.probs = nn.Parameter(torch.tensor([1 / num_components] * num_components), requires_grad=False)
+
+    def get_means_init(self, num_components, latent_dim, radius):
+        one_hot = np.zeros([num_components, latent_dim])
+        one_hot[np.arange(latent_dim) % num_components, np.arange(latent_dim)] = 1
+        one_hot *= radius / latent_dim * num_components
+        one_hot += np.random.normal(0, .001, size=one_hot.shape)
+        return one_hot
 
     def __len__(self):
         return self.num_components
 
     def parameters(self):
         if self.requires_grad:
-            # TODO: self.variances? self.probs?
             return [self.means]
         else:
             return []
@@ -33,16 +68,16 @@ class GaussianMixture:
 
     # TODO: torchify
     def calculate_logits(self, X):
-        D = tf.cast(tf.shape(means)[-1], tf.float32)
-        diffs = tf.expand_dims(tensor_z, 1) - tf.expand_dims(means, 0)
-        class_logits = -norm_squared(diffs, axis=-1) / (2 * variance)
-        class_logits = tf.log(p) - 0.5 * D * tf.log(2 * pi * variance) + class_logits
+        D = self.means.shape[-1]
+        diffs = torch.unsqueeze(X, 1) - torch.unsqueeze(self.means, 0)
+        class_logits = -norm_squared(diffs, dim=-1) / (2 * self.variances)
+        class_logits = torch.log(self.probs) - 0.5 * D * torch.log(2 * pi * self.variances) + class_logits
         return class_logits
 
     def cw_distance(self, X):
         N, D = X.shape
 
-        gamma = torch.tensor(np.power(4 / (3 * X.shape[0] / self.num_components), 0.4)).to(DEVICE)
+        gamma = torch.tensor(np.power(4 / (3 * X.shape[0] / self.num_components), 0.4)).to(X.device).float()
 
         variance_matrix = torch.unsqueeze(self.variances, 0) + torch.unsqueeze(self.variances, 1)
         X_sub_matrix = torch.unsqueeze(X, 0) - torch.unsqueeze(X, 1)
@@ -69,49 +104,14 @@ class GaussianMixture:
 
         return torch.log(torch.mean(A + B - C))
 
-class Segma(nn.Module):
-    def __init__(self, name, gmm, coder, loss_weights):
-        self.name = name
-        self.gmm = gmm
-        self.coder = coder
-        self.loss_weight = loss_weights
-
-    def supervised_loss(encoded, y_batch):
-        class_logits = self.gmm.calculate_logits(encoded)
-        classification_loss = self.class_loss(class_logits, y_batch)
-        return classification_loss
-
-    def unsupervised_loss(self, encoded, decoded, X):
-        # TODO: train_labeled
-
-        # MSE
-        rec_cost = norm_squared(decoded, X_batch, dim=-1).mean()
-        log_cw_cost = self.gmm.cw_distance(encoded)
-
-        # TODO: gradient clipping
-
-        # TODO: weightning
-        return rec_cost + log_cw_cost
-
-    def forward(x):
-        return self.coder(x)
-
-        
 
 
 # ======================================
 # ========== HELPER FUNCTIONS ==========
 # ======================================
 
-def get_labels_mask(tensor_labels):
-    one = tf.constant(1, tf.float32)
-    labels_mask = tf.equal(one, tf.reduce_sum(tensor_labels, axis=-1))
-    labels_mask = tf.cast(labels_mask, tf.bool)
-    return labels_mask
-
-
 def norm_squared(X, dim=-1):
-    return (X ** 2, dim=dim).sum()
+    return (X ** 2).sum(dim=dim)
 
 def phi_f(s):
     t = s / 7.5
@@ -128,7 +128,7 @@ def phi_g(s):
             + 0.02635537*t**(-6) - 0.01647633*t**(-7) + 0.00392377*t**(-8))
 
 def phi(x):
-    a = torch.tensor(7.5).to(DEVICE)
+    a = torch.tensor(7.5).to(x.device).float()
     return phi_f(torch.min(x, a)) - phi_f(a) + phi_g(torch.max(x, a))
 
 def phi_d(s, D):
@@ -138,41 +138,3 @@ def phi_d(s, D):
         return 1 / torch.sqrt(1 + (4 * s) / (2 * D - 3))
 
 
-def get_gaussians(z_dim, init, dataset, gauss_num):
-    G = gauss_num
-    with tf.variable_scope("gmm", reuse=False):
-
-        if G <= z_dim:
-            one_hot = np.zeros([G, z_dim])
-            one_hot[np.arange(z_dim) % G, np.arange(z_dim)] = 1
-            one_hot *= init / z_dim * G
-            one_hot += np.random.normal(0, .001, size=one_hot.shape)
-        else:
-            one_hot = np.random.normal(0, init, size=(G, z_dim))
-
-        if gauss_num == 1:
-            initializer = tf.constant_initializer([[0] * z_dim])
-            means = tf.get_variable(
-                "gmm_means", [1, z_dim],
-                initializer=initializer, dtype=tf.float32
-            )
-        else:
-            means_initialization = tf.constant_initializer(one_hot)
-            means = tf.get_variable(
-                    "gmm_means", [G, z_dim],
-                    initializer=means_initialization)
-
-        beta = tf.zeros([G], name="betas")
-        variances = 1.0 + tf.abs(beta)
-
-        labels_proportions = (
-            dataset.labeled_train["y"].sum(0)
-            / dataset.labeled_train["y"].sum()
-            )
-        probs = tf.constant(labels_proportions, dtype=tf.float32)
-        probs = tf.reshape(probs, (-1,))
-
-        if gauss_num == 1:
-            probs = tf.constant([1.], dtype=tf.float32)
-    print("Shape of gaussians", means.shape, gauss_num)
-    return means, variances, probs
