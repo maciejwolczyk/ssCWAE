@@ -12,14 +12,14 @@ import matplotlib.pyplot as plt
 import architecture
 import cwae
 import data_loader
-# import metrics
+import metrics
 import utils
 
 
 METRICS_ENABLED = False
 def train_model(config):
     train_set, test_set, loaders = data_loader.get_dataset_by_name(
-            config["dataset_name"], rng_seed=config["rng_seed"])
+            config["dataset_name"], config["batch_size"], config["labeled_num"])
 
     if config["dataset_name"] == "celeba_multitag" or config["dataset_name"] == "celeba_singletag":
         coder = architecture.CelebaCoder(
@@ -45,13 +45,12 @@ def train_model(config):
     )
 
     model = cwae.Segma(model_name, gmm, coder, config["loss_weights"])
-    print(list(model.parameters()))
     optimizer = optim.Adam(model.parameters(), lr=config["learning_rate"])
 
     run_training(model, optimizer, loaders)
 
 def run_training(model, optimizer, loaders):
-    n_epochs = 400
+    n_epochs = 100
 
     costs = []
     for epoch_n in trange(n_epochs + 1):
@@ -67,28 +66,16 @@ def run_training(model, optimizer, loaders):
         metrics.save_costs(model, valid_costs, "valid")
         metrics.save_costs(model, test_costs, "test")
 
-def draw_gmm(model, loaders):
-    all_encoded = []
-    for unlabeled_X, _ in loaders["unsupervised"]:
-        encoded, _ = model(unlabeled_X)
-        all_encoded += [encoded.cpu().detach().numpy()]
-    all_encoded = np.concatenate(all_encoded, 0)
-    print("\n\n", all_encoded.shape)
-    all_encoded = all_encoded.reshape([all_encoded.shape[0], -1])
-    plt.scatter(all_encoded[:, 0], all_encoded[:, 1])
-
-    # Ugh
-    means = model.gmm.means.cpu().detach().numpy()
-    plt.scatter(means[:, 0], means[:, 1], marker="^")
-    plt.show()
 
 def run_epoch(epoch_n, model, optimizer, loaders):
-    for unlabeled_X, unlabeled_Y in tqdm(loaders["unsupervised"], leave=False):
+    losses = []
+    for unlabeled_X, _ in tqdm(loaders["unsupervised"], leave=False):
         labeled_X, labeled_Y = next(iter(loaders["supervised"]))
         optimizer.zero_grad()
 
         encoded, decoded = model(unlabeled_X)
         unsuper_loss = model.unsupervised_loss(encoded, decoded, unlabeled_X)
+        losses += [unsuper_loss.item()]
 
         encoded, _ = model(labeled_X)
         super_loss = model.supervised_loss(encoded, labeled_Y)
@@ -96,9 +83,17 @@ def run_epoch(epoch_n, model, optimizer, loaders):
         full_loss = unsuper_loss + super_loss
         full_loss.backward()
         optimizer.step()
-        break
-    
-    draw_gmm(model, loaders)
+
+    print(model.gmm.means)
+    print("Mean loss", np.mean(losses))
+
+    if epoch_n % 1 == 0:
+        metrics.draw_gmm(model, loaders, epoch_n=epoch_n)
+        metrics.show_reconstructions(model, loaders["unsupervised"], epoch_n=epoch_n)
+
+    train_acc = metrics.evaluate_model(model, loaders["supervised"])
+    test_acc = metrics.evaluate_model(model, loaders["test"])
+    print(f"\tEpoch {epoch_n}\tTrain acc: {train_acc}\tTest acc: {test_acc}")
 
     if METRICS_ENABLED:
         train_metrics, _, _ = metrics.evaluate_gmmcwae(
