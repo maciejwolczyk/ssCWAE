@@ -25,15 +25,20 @@ class Segma(nn.Module):
         log_cw_cost = self.gmm.cw_distance(encoded)
 
         # TODO: gradient clipping
-        # TODO: weightning
-
         return rec_cost + log_cw_cost * self.loss_weights["cw"]
 
+    def classify(self, x):
+        x = self.coder.preprocess(x)
+        encoded = self.coder.encoder(x)
+        logits = self.gmm.calculate_logits(encoded)
+        probs = torch.softmax(logits, dim=-1)
+        return probs
+
     def forward(self, x):
-        return self.coder(x.float())
+        return self.coder(x)
 
 class GaussianMixture(nn.Module):
-    def __init__(self, num_components, latent_dim, radius, var=0.01):
+    def __init__(self, num_components, latent_dim, radius, var=1., probs=None):
         # TODO: change init
         super(GaussianMixture, self).__init__()
 
@@ -43,14 +48,20 @@ class GaussianMixture(nn.Module):
 
         self.means = nn.Parameter(torch.tensor(means).float())
         self.variances = nn.Parameter(torch.tensor([var] * num_components), requires_grad=False)
-        self.probs = nn.Parameter(torch.tensor([1 / num_components] * num_components), requires_grad=False)
+
+        if probs is None:
+            probs = [1 / num_components] * num_components
+        self.probs = nn.Parameter(torch.tensor(probs), requires_grad=False)
 
     def get_means_init(self, num_components, latent_dim, radius):
-        one_hot = np.zeros([num_components, latent_dim])
-        one_hot[np.arange(latent_dim) % num_components, np.arange(latent_dim)] = 1
-        one_hot *= radius / latent_dim * num_components
-        one_hot += np.random.normal(0, .001, size=one_hot.shape)
-        return one_hot
+        if latent_dim >= num_components:
+            one_hot = np.zeros([num_components, latent_dim])
+            one_hot[np.arange(latent_dim) % num_components, np.arange(latent_dim)] = 1
+            one_hot *= radius / latent_dim * num_components
+            init = one_hot + np.random.normal(0, .001, size=one_hot.shape)
+        else:
+            init = (np.random.rand(num_components, latent_dim) - 0.5) * 2 * radius / latent_dim
+        return init
 
     def __len__(self):
         return self.num_components
@@ -66,7 +77,6 @@ class GaussianMixture(nn.Module):
         dists = dists.sum(-1)
         return dists.argmin(1)
 
-    # TODO: torchify
     def calculate_logits(self, X):
         D = self.means.shape[-1]
         diffs = torch.unsqueeze(X, 1) - torch.unsqueeze(self.means, 0)
@@ -77,14 +87,14 @@ class GaussianMixture(nn.Module):
     def cw_distance(self, X):
         N, D = X.shape
 
-        gamma = torch.tensor(np.power(4 / (3 * X.shape[0] / self.num_components), 0.4)).to(X.device).float()
+        gamma = np.power(4 / (3 * 100 / self.num_components), 0.4)
 
         variance_matrix = torch.unsqueeze(self.variances, 0) + torch.unsqueeze(self.variances, 1)
         X_sub_matrix = torch.unsqueeze(X, 0) - torch.unsqueeze(X, 1)
         A1 = torch.sum(X_sub_matrix ** 2, dim=2)
 
         A1 = torch.sum(phi_d(A1 / (4 * gamma), D))
-        A = 1/(N*N * torch.sqrt(2 * pi * 2 * gamma)) * A1
+        A = 1/(N*N * np.sqrt(2 * pi * 2 * gamma)) * A1
 
         m_sub_matrix = torch.unsqueeze(self.means, 0) - torch.unsqueeze(self.means, 1)
         p_mul_matrix = torch.matmul(
@@ -136,5 +146,3 @@ def phi_d(s, D):
         return phi(s)
     else:
         return 1 / torch.sqrt(1 + (4 * s) / (2 * D - 3))
-
-

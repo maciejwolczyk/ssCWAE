@@ -20,7 +20,7 @@ def prepare_directories(model_name, config):
         yaml.dump(config, f)
 
 def get_timestamp():
-    return time.time()
+    return int(time.time())
 
 def load_yaml(config_path):
     with open(config_path) as f:

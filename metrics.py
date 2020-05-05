@@ -1,60 +1,114 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
-from sklearn.metrics import adjusted_rand_score
+# from sklearn.metrics import adjusted_rand_score
 from sklearn.decomposition import PCA
 from tqdm import trange
 from PIL import Image
 
-plt.switch_backend("agg")
+# def draw_gmm(
+#         z, y, dataset, means=None, alpha=None, p=None,
+#         title="", filename=None, lims=True):
+# 
+#     fig = plt.figure(figsize=(10, 10))
+#     ax = plt.gca()
+#     ax.set_aspect('equal')
+# 
+#     if lims:
+#         ax.set_xlim(-10, 10)
+#         ax.set_ylim(-10, 10)
+# 
+#     color_arr = [
+#         'blue', 'green', 'red', 'cyan', 'magenta', 'yellow', 'lime', 'purple',
+#         'pink', 'brown', 'orange', 'teal', 'coral', 'lightblue', 'black'
+#         ]
+#     color_arr = np.array(color_arr)
+# 
+#     labeled_z = z[y.sum(1) == 1]
+#     unlabeled_z = z[y.sum(1) == 0]
+#     p = p / p.sum()
+# 
+#     if len(unlabeled_z) > 0:
+#         plt.scatter(unlabeled_z[:, 0], unlabeled_z[:, 1], c="gray")
+# 
+#     c = color_arr[np.argmax(y, axis=1)[:len(labeled_z)]]
+# 
+#     plt.scatter(labeled_z[:, 0], labeled_z[:, 1], c=c)
+# 
+#     # TODO: nie rysujemy meanow
+#     if means is not None:
+#         for i in range(len(means)):
+#             c = color_arr[i]
+#             plt.scatter(
+#                 means[i, 0], means[i, 1], c=c,
+#                 label=dataset.labels_names[i]
+#                 )
+# 
+#     plt.title(title)
+#     plt.legend()
+#     if filename is None:
+#         plt.show()
+#     else:
+#         plt.savefig(filename, bbox_inches='tight')
+#         plt.close(fig)
 
+def draw_gmm(model, loaders, epoch_n=None):
+    all_encoded = []
+    for idx, (unlabeled_X, _) in enumerate(loaders["unsupervised"]):
+        encoded, _ = model(unlabeled_X)
+        all_encoded += [encoded.cpu().detach().numpy()]
+        if idx > 10:
+            break
+    all_encoded = np.concatenate(all_encoded, 0)
 
-def draw_gmm(
-        z, y, dataset, means=None, alpha=None, p=None,
-        title="", filename=None, lims=True):
-
-    fig = plt.figure(figsize=(10, 10))
-    ax = plt.gca()
-    ax.set_aspect('equal')
-
-    if lims:
-        ax.set_xlim(-10, 10)
-        ax.set_ylim(-10, 10)
-
-    color_arr = [
-        'blue', 'green', 'red', 'cyan', 'magenta', 'yellow', 'lime', 'purple',
-        'pink', 'brown', 'orange', 'teal', 'coral', 'lightblue', 'black'
-        ]
-    color_arr = np.array(color_arr)
-
-    labeled_z = z[y.sum(1) == 1]
-    unlabeled_z = z[y.sum(1) == 0]
-    p = p / p.sum()
-
-    if len(unlabeled_z) > 0:
-        plt.scatter(unlabeled_z[:, 0], unlabeled_z[:, 1], c="gray")
-
-    c = color_arr[np.argmax(y, axis=1)[:len(labeled_z)]]
-
-    plt.scatter(labeled_z[:, 0], labeled_z[:, 1], c=c)
-
-    # TODO: nie rysujemy meanow
-    if means is not None:
-        for i in range(len(means)):
-            c = color_arr[i]
-            plt.scatter(
-                means[i, 0], means[i, 1], c=c,
-                label=dataset.labels_names[i]
-                )
-
-    plt.title(title)
-    plt.legend()
-    if filename is None:
-        plt.show()
+    if all_encoded.shape[1] == 2:  # If we're on a plane, PCA is not necessary
+        points = all_encoded
+        means = model.gmm.means.cpu().detach().numpy()
     else:
-        plt.savefig(filename, bbox_inches='tight')
-        plt.close(fig)
+        pca = PCA(2)
+        points = pca.fit_transform(all_encoded)
+        means = model.gmm.means.cpu().detach().numpy()
+        means = pca.transform(means)
 
+    plt.scatter(points[:, 0], points[:, 1])
+    plt.scatter(means[:, 0], means[:, 1], marker="^")
+
+    if epoch_n is not None:
+        prefix = f"e{epoch_n}_"
+    else:
+        prefix = ""
+    plt.savefig(f"results/{model.name}/{prefix}scatter.png")
+    plt.close()
+
+def show_reconstructions(model, loader, epoch_n):
+    unlabeled_X, _ = next(iter(loader))
+    _, decoded = model(unlabeled_X)
+    decoded = decoded.detach().cpu().numpy()
+
+    if epoch_n is not None:
+        prefix = f"e{epoch_n}_"
+    else:
+        prefix = ""
+
+    for idx, (rec, orig) in enumerate(zip(decoded[:10], unlabeled_X[:10])):
+        plt.imshow(orig.reshape(28, 28))
+        plt.savefig(f"results/{model.name}/{prefix}rec_{idx}orig.png")
+        plt.close()
+
+        plt.imshow(rec.reshape(28, 28))
+        plt.savefig(f"results/{model.name}/{prefix}rec_{idx}rec.png")
+        plt.close()
+
+
+def evaluate_model(model, loader):
+    correct_n = 0
+    all_n = 0
+    for batch_X, batch_y in loader:
+        preds = model.classify(batch_X)
+        correct_n += (preds.argmax(-1) == batch_y).float().sum().item()
+        all_n += len(batch_y)
+    acc = correct_n / all_n
+    return acc
 
 def evaluate_gmmcwae(
         sess, model, valid_set, epoch, dataset,

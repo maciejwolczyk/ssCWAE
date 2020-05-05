@@ -9,17 +9,16 @@ from torchvision import datasets
 from torchvision.transforms import ToTensor
 from tqdm import tqdm
 
-def prepare_loaders(train_dataset, test_dataset):
+def prepare_loaders(train_dataset, test_dataset, batch_size, labeled_num):
     unsupervised_loader = DataLoader(
-        train_dataset, batch_size=128, shuffle=True)
+        train_dataset, batch_size=batch_size, shuffle=True)
 
-
-    supervised_dataset = Subset(train_dataset, range(100))
+    labeled_indices = np.random.choice(60000, size=labeled_num, replace=False)
+    supervised_dataset = Subset(train_dataset, labeled_indices)
     supervised_loader = DataLoader(
-        supervised_dataset, batch_size=128, shuffle=True)
+        supervised_dataset, batch_size=batch_size, shuffle=True)
 
-    test_loader = DataLoader(
-        test_dataset, batch_size=128)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size)
     loaders = {
         "unsupervised": unsupervised_loader,
         "supervised": supervised_loader,
@@ -70,7 +69,7 @@ def get_svhn(extra=True):
     labels = list(str(i) for i in range(1, 10)) + ["0"]
     return dataset_train, dataset_test, labels, "svhn"
 
-def get_dataset_by_name(name, rng_seed, extra=True):
+def get_dataset_by_name(name, batch_size, labeled_num):
     dataset_getters = {
        "MNIST": get_mnist,
        "Fashion_MNIST": get_fashion_mnist,
@@ -82,8 +81,8 @@ def get_dataset_by_name(name, rng_seed, extra=True):
     }
 
     getter = dataset_getters[name]
-    train, test, labels, name = getter(extra=extra)
-    loaders = prepare_loaders(train, test)
+    train, test, labels, name = getter()
+    loaders = prepare_loaders(train, test, batch_size, labeled_num)
     return train, test, loaders
 
 def one_hot_vectorize(dataset, labels_n):

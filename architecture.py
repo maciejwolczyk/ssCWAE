@@ -173,8 +173,11 @@ class FCCoder(nn.Module):
         decoder_modules += [nn.ReLU(), nn.Linear(hidden_dim, input_dim), nn.Sigmoid()]
         self.decoder = nn.Sequential(*decoder_modules)
 
+    def preprocess(self, x):
+        return x.view(x.shape[0], -1).float()
+
     def forward(self, x):
-        x = x.view(x.shape[0], -1)
+        x = self.preprocess(x)
         encoded = self.encoder(x)
         decoded = self.decoder(encoded)
         return encoded, decoded
