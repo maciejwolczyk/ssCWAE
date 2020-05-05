@@ -21,11 +21,13 @@ class Segma(nn.Module):
 
     def unsupervised_loss(self, encoded, decoded, X):
         X = X.view(decoded.shape)
-        rec_cost = norm_squared(decoded - X).mean()
-        log_cw_cost = self.gmm.cw_distance(encoded)
+        rec_loss = norm_squared(decoded - X).mean()
+        log_cw_loss = self.gmm.cw_distance(encoded)
+
+        unsuper_loss = rec_loss + log_cw_loss * self.loss_weights["cw"]
 
         # TODO: gradient clipping
-        return rec_cost + log_cw_cost * self.loss_weights["cw"]
+        return unsuper_loss, rec_loss, log_cw_loss
 
     def classify(self, x):
         x = self.coder.preprocess(x)

@@ -74,18 +74,18 @@ def run_epoch(epoch_n, model, optimizer, loaders):
         optimizer.zero_grad()
 
         encoded, decoded = model(unlabeled_X)
-        unsuper_loss = model.unsupervised_loss(encoded, decoded, unlabeled_X)
-        losses += [unsuper_loss.item()]
+        unsuper_loss, rec_loss, cw_loss = model.unsupervised_loss(encoded, decoded, unlabeled_X)
 
         encoded, _ = model(labeled_X)
         super_loss = model.supervised_loss(encoded, labeled_Y)
+        losses += [[rec_loss.item(), cw_loss.item(), super_loss.item()]]
 
         full_loss = unsuper_loss + super_loss
         full_loss.backward()
         optimizer.step()
 
     print(model.gmm.means)
-    print("Mean loss", np.mean(losses))
+    print("Mean loss", np.mean(losses, axis=0))
 
     if epoch_n % 1 == 0:
         metrics.draw_gmm(model, loaders, epoch_n=epoch_n)

@@ -16,5 +16,5 @@ loss_weights:
   supervised: 10.
   cw: 5.
 
-init_radius: 10
+init_radius: 0.1
 rng_seed: 20
