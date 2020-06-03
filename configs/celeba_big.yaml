@@ -1,0 +1,26 @@
+dataset_name: CelebA
+exp_name: "regular"
+device: cuda
+components_num: 4
+arch: cnn
+multilabel: False
+separate_cw: False
+
+labeled_num: 1000
+learning_rate: 3.e-4
+batch_size: 250
+
+
+architecture:
+  latent_dim: 32
+  hidden_dim: 786
+  kernel_size: 4
+  kernel_num: 32
+
+loss_weights:
+  distance: 0.
+  supervised: 10.
+  cw: 5.
+
+init_radius: 1.
+rng_seed: 20

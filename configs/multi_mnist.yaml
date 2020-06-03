@@ -1,21 +1,20 @@
-dataset_name: MNIST
+dataset_name: MultiMNIST
 device: cuda
-components_num: 10
+components_num: 4
 
-labeled_num: 100
+labeled_num: 500
 learning_rate: 3.e-4
-batch_size: 100
+batch_size: 500
 
 architecture:
   layers_num: 3
   input_dim: 784
   latent_dim: 10
-  # latent_dim: 2
   hidden_dim: 1024
 
 loss_weights:
   distance: 0.
-  supervised: 10.
+  supervised: 2.
   cw: 5.
 
 init_radius: 0.1

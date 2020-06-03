@@ -1,161 +1,78 @@
 from torch import nn
 
 # VARIOUS ARCHITECTURES
-# class CelebaCoder():
-#     def __init__(
-#             self, dataset, h_dim=256, kernel_size=4, kernel_num=32):
-# 
-#         self.h_dim = h_dim
-#         self.kernel_size = kernel_size
-#         self.kernel_num = kernel_num
-#         self.image_shape = dataset.image_shape
-# 
-#     def encode(self, x, z_dim, training=False):
-#         im_h, im_w, im_c = self.image_shape
-# 
-#         with tf.variable_scope("encoder", reuse=tf.AUTO_REUSE):
-#             h = x
-#             h = tf.reshape(h, (-1, im_h, im_w, im_c))
-# 
-#             h = tfl.conv2d(
-#                     h, self.kernel_num, self.kernel_size,
-#                     strides=2, padding="same")
-#             h = tf.nn.relu(h)
-# 
-#             h = tfl.conv2d(
-#                     h, self.kernel_num, self.kernel_size,
-#                     strides=2, padding="same")
-#             h = tf.nn.relu(h)
-# 
-#             h = tfl.conv2d(
-#                     h, self.kernel_num * 2, self.kernel_size,
-#                     strides=2, padding="same")
-#             h = tf.nn.relu(h)
-# 
-#             h = tfl.conv2d(
-#                     h, self.kernel_num * 2, self.kernel_size,
-#                     strides=2, padding="same")
-#             h = tf.nn.relu(h)
-# 
-#             h = tfl.flatten(h)
-#             h = tfl.dense(h, units=self.h_dim, activation=tf.nn.relu)
-#             h = tfl.dense(h, units=self.h_dim, activation=tf.nn.relu)
-#             z_mean = tfl.dense(h, units=z_dim, name='z_mean')
-#             # z_mean = tfl.batch_normalization(z_mean, training=training)
-#             return z_mean
-# 
-#     def decode(self, z, x_dim, training=False):
-#         im_h, im_w, im_c = self.image_shape
-# 
-#         with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
-#             h = z
-#             h = tfl.dense(h, units=self.h_dim, activation=tf.nn.relu)
-#             h = tfl.dense(h, units=self.h_dim, activation=tf.nn.relu)
-#             stride = 16
-#             h = tfl.dense(
-#                     h, units=im_h // stride * im_w // stride * self.kernel_num * 2,
-#                     activation=tf.nn.relu)
-#             new_shape = (-1, im_h // stride, im_w // stride, self.kernel_num * 2)
-#             h = tf.reshape(h, new_shape)
-# 
-#             h = tfl.conv2d_transpose(
-#                     h, self.kernel_num * 2, self.kernel_size,
-#                     strides=2, padding="same", activation=tf.nn.relu)
-# 
-#             h = tfl.conv2d_transpose(
-#                     h, self.kernel_num, self.kernel_size,
-#                     strides=2, padding="same", activation=tf.nn.relu)
-# 
-#             h = tfl.conv2d_transpose(
-#                     h, self.kernel_num, self.kernel_size,
-#                     strides=2, padding="same", activation=tf.nn.relu)
-# 
-#             h = tfl.conv2d_transpose(
-#                     h, im_c, self.kernel_size,
-#                     strides=2, padding="same", activation=tf.nn.sigmoid)
-# 
-#             h = tfl.flatten(h)
-#             y_mean = h
-#             return y_mean
-# 
-# 
-# class CifarCoder():
-#     def __init__(
-#             self, dataset, h_dim=256, kernel_size=3, kernel_num=32):
-# 
-#         self.h_dim = h_dim
-#         self.kernel_size = kernel_size
-#         self.kernel_num = kernel_num
-#         self.image_shape = dataset.image_shape
-# 
-#     def encode(self, x, z_dim, training=False):
-#         im_h, im_w, im_c = self.image_shape
-# 
-#         with tf.variable_scope("encoder", reuse=tf.AUTO_REUSE):
-#             h = x
-#             h = tf.reshape(h, (-1, im_h, im_w, im_c))
-#             # TODO:
-#             h = tfl.conv2d(
-#                     h, self.kernel_num, self.kernel_size,
-#                     strides=1, padding="same")
-#             h = tf.nn.relu(h)
-# 
-#             h = tfl.conv2d(
-#                     h, self.kernel_num, self.kernel_size,
-#                     strides=2, padding="same")
-#             h = tf.nn.relu(h)
-# 
-#             # TODO: tu troche zmienilem
-#             h = tfl.conv2d(
-#                     h, self.kernel_num * 2, self.kernel_size,
-#                     strides=2, padding="same")
-#             h = tf.nn.relu(h)
-# 
-#             h = tfl.conv2d(
-#                     h, self.kernel_num * 2, self.kernel_size,
-#                     strides=2, padding="same")
-#             h = tf.nn.relu(h)
-# 
-#             h = tfl.flatten(h)
-#             h = tfl.dense(h, units=self.h_dim, activation=tf.nn.relu)
-#             z_mean = tfl.dense(h, units=z_dim, name='z_mean')
-#             # z_mean = tfl.batch_normalization(z_mean, training=training)
-#             return z_mean
-# 
-#     def decode(self, z, x_dim, training=False):
-#         im_h, im_w, im_c = self.image_shape
-# 
-#         with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
-#             h = z
-#             h = tfl.dense(h, units=self.h_dim, activation=tf.nn.relu)
-#             # h = tfl.dense(h, units=self.h_dim, activation=tf.nn.relu)
-#             stride = 8
-#             h = tfl.dense(
-#                     h, units=im_h // stride * im_w // stride * self.kernel_num * 2,
-#                     activation=tf.nn.relu)
-#             new_shape = (-1, im_h // stride, im_w // stride, self.kernel_num * 2)
-#             h = tf.reshape(h, new_shape)
-# 
-#             h = tfl.conv2d_transpose(
-#                     h, self.kernel_num * 2, self.kernel_size,
-#                     strides=2, padding="same", activation=tf.nn.relu)
-# 
-#             h = tfl.conv2d_transpose(
-#                     h, self.kernel_num, self.kernel_size,
-#                     strides=2, padding="same", activation=tf.nn.relu)
-# 
-#             h = tfl.conv2d_transpose(
-#                     h, self.kernel_num, self.kernel_size,
-#                     strides=2, padding="same", activation=tf.nn.relu)
-# 
-#             h = tfl.conv2d_transpose(
-#                     h, im_c, self.kernel_size,
-#                     strides=1, padding="same", activation=tf.nn.sigmoid)
-# 
-#             h = tfl.flatten(h)
-#             y_mean = h
-#             return y_mean
+class CelebaCoder(nn.Module):
+    def __init__(self, hidden_dim, kernel_size, kernel_num, latent_dim):
+        super(CelebaCoder, self).__init__()
 
+        self.kn = kernel_num
+        kn, ks = kernel_num, kernel_size
+
+        self.encoder_cnn_modules = [
+            nn.Conv2d(3, kn, ks, stride=2, padding=ks // 2),
+            nn.ReLU(),
+            nn.Conv2d(kn, kn, ks, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(kn, kn * 2, ks, stride=2, padding=ks // 2),
+            nn.ReLU(),
+            nn.Conv2d(kn * 2, kn * 2, ks, stride=2, padding=1),
+            nn.ReLU()
+        ]
+        self.encoder_fc_modules = [
+            nn.Linear(4 * 4 * kn * 2, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, latent_dim)
+        ]
+
+        self.encoder_cnn = nn.Sequential(*self.encoder_cnn_modules)
+        self.encoder_fc = nn.Sequential(*self.encoder_fc_modules)
+
+
+        self.decoder_fc_modules = [
+            nn.Linear(latent_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 4 * 4 * kn * 2),
+            nn.ReLU(),
+        ]
+
+        self.decoder_cnn_modules = [
+            nn.ConvTranspose2d(kn * 2, kn * 2, ks, stride=2, padding=1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(kn * 2, kn, ks, stride=2, padding=1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(kn, kn, ks, stride=2, padding=1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(kn, 3, ks, stride=2, padding=1),
+            nn.Sigmoid()
+        ]
+
+        self.decoder_fc = nn.Sequential(*self.decoder_fc_modules)
+        self.decoder_cnn = nn.Sequential(*self.decoder_cnn_modules)
+
+    def preprocess(self, x):
+        return x
+
+    def encode(self, x):
+        x = self.encoder_cnn(x)
+        x = x.view(x.shape[0],-1)
+        x = self.encoder_fc(x)
+        return x
+
+    def decode(self, x):
+        x = self.decoder_fc(x)
+        x = x.view(-1, self.kn * 2, 4, 4)
+        x = self.decoder_cnn(x)
+        return x
+
+    def forward(self, x):
+        x = self.preprocess(x)
+        encoded = self.encode(x)
+        decoded = self.decode(encoded)
+        return encoded, decoded
 
 class FCCoder(nn.Module):
     def __init__(self, layers_num, input_dim, hidden_dim, latent_dim):
@@ -176,8 +93,15 @@ class FCCoder(nn.Module):
     def preprocess(self, x):
         return x.view(x.shape[0], -1).float()
 
+    def encode(self, x):
+        return self.encoder(x)
+
+    def decode(self, x):
+        return self.decoder(encoded)
+
+
     def forward(self, x):
         x = self.preprocess(x)
-        encoded = self.encoder(x)
-        decoded = self.decoder(encoded)
+        encoded = self.encode(x)
+        decoded = self.decode(encoded)
         return encoded, decoded
